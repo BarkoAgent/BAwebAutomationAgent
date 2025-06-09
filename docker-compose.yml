@@ -1,0 +1,12 @@
+
+services:
+  client_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "client.py"]
+    volumes:
+      - .:/app
+    working_dir: /app
+    ports:
+      - "6789:6789"  # If this service uses the same port

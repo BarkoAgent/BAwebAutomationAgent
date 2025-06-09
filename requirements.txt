@@ -1,0 +1,4 @@
+fastapi
+websockets==10.4
+requests
+python-testui
