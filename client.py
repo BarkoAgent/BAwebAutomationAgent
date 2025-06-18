@@ -30,7 +30,9 @@ FUNCTION_MAP = {
     "change_windows_tabs": agent_func.change_windows_tabs,
     "change_frame_by_id": agent_func.change_frame_by_id,
     "change_frame_by_locator": agent_func.change_frame_by_locator,
-    "change_frame_to_original": agent_func.change_frame_to_original
+    "change_frame_to_original": agent_func.change_frame_to_original,
+    "double_click": agent_func.double_click,
+    "right_click": agent_func.right_click
 }
 
 
