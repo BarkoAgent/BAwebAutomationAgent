@@ -246,10 +246,9 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
     and its locator path associated is visible in the web page
     """
     global driver
-    from selenium.webdriver.common.action_chains import ActionChains
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    actions = ActionChains(driver[_run_test_id])
-    actions.move_to_element(element).perform()
+    current_driver_instance = driver[_run_test_id]
+    current_driver_instance.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
     log_function_definition(scroll_to_element, locator_type, locator, _run_test_id=_run_test_id)
     return "scrolled"
 
