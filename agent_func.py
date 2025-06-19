@@ -267,6 +267,31 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     html_content = clean_html(content)
     return html_content
 
+def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
+    """
+    Double clicks on the element defined by its `locator_type` (id, css, xpath)
+    and its locator path associated.
+    """
+    global driver
+    from selenium.webdriver.common.action_chains import ActionChains
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    actions = ActionChains(driver[_run_test_id])
+    actions.double_click(element).perform()
+    log_function_definition(double_click, locator_type, locator, _run_test_id=_run_test_id)
+    return "double clicked"
+
+def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
+    """
+    Right clicks on the element defined by its `locator_type` (id, css, xpath)
+    and its locator path associated.
+    """
+    global driver
+    from selenium.webdriver.common.action_chains import ActionChains
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    actions = ActionChains(driver[_run_test_id])
+    actions.context_click(element).perform()
+    log_function_definition(right_click, locator_type, locator, _run_test_id=_run_test_id)
+    return "right clicked"
 
 def get_page_html(_run_test_id='1') -> str:
     """
