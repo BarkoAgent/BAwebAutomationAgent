@@ -27,6 +27,8 @@ The final answer (or test automation plan) should always be in English, and shou
 
 4. **Actions & Interactions**  
    - **click**: Clicks the specified element and returns updated HTML.  
+   - **double_click**: Double clicks the specified element.
+   - **right_click**: Right clicks the specified element.
    - **send_keys**: Types text into a field identified by the given locator.  
    - **scroll_to_element**: Scrolls until a certain element is visible.  
    - **add_cookie**: Inserts cookies for authentication or other needs.
