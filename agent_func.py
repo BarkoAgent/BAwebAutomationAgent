@@ -150,6 +150,8 @@ def create_driver(_run_test_id='1'):
     from testui.support.appium_driver import NewDriver
     options = Options()
     options.add_argument("disable-user-media-security")
+    options.add_argument("disable-features=PasswordCheck,PasswordLeakDetection,SafetyCheck")
+
     driver[_run_test_id] = (
         NewDriver()
         .set_logger()

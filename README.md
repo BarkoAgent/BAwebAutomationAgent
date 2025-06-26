@@ -43,3 +43,13 @@ You can test this custom agent by writing:
 `Go to barkoagent.com and check that there is a join input`
 
 `Go to barkoagent.com and check that there is a join input, and input a random email but don't sent it`
+
+## Modifying capabilities
+You can modify capabilites of browser in `agent_func.py` under `create_driver` method.
+<br>For example:<br>
+- `disable-user-media-security` - Disables media (mic/cam) permission checks
+- `disable-features=PasswordCheck,PasswordLeakDetection,SafetyCheck` - Disables Chrome password leak warning
+- `disable-notifications` - Blocks web push notifications
+- `window-size=1920,1080` - Sets window size
+- `ignore-certificate-errors` - Ignores SSL cert errors
+- `incognito` - Runs in incognito mode
