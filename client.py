@@ -1,17 +1,26 @@
+#!/usr/bin/env python3
 import asyncio
 import inspect
 import json
-import websockets
 import logging
 import os
 import sys
-import agent_func  # Your fully operational Selenium code on the client machine.
+import websockets
+from dotenv import load_dotenv
 
-# Configure logging to show the timestamp, log level, and message.
+import agent_func
+
+load_dotenv()
+# -------------------------
+# Configuration & Logging
+# -------------------------
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s: %(message)s'
 )
+
+# Concurrency limit (max number of concurrent handlers). Default: 4
+CONCURRENCY_LIMIT = int(os.getenv("CONCURRENCY_LIMIT", "4"))
 
 # Build a mapping between function names and the actual implementations.
 FUNCTION_MAP = {
@@ -35,27 +44,49 @@ FUNCTION_MAP = {
     "right_click": agent_func.right_click
 }
 
+# Global primitive for concurrency control
+SEM = asyncio.Semaphore(CONCURRENCY_LIMIT)
 
+# -------------------------------------------------------------------
+# Utilities: safe call for sync/coroutine functions
+# -------------------------------------------------------------------
+async def call_maybe_blocking(func, *args, **kwargs):
+    """
+    If func is an async coroutine function, await it.
+    Otherwise, run the blocking sync function in a thread using asyncio.to_thread.
+    """
+    if asyncio.iscoroutinefunction(func):
+        return await func(*args, **kwargs)
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 # -------------------------------------------------------------------
 # MESSAGE HANDLER
 # -------------------------------------------------------------------
 async def handle_message(message):
     """
-    Processes an incoming message, executes the requested function,
-    and returns the response as a JSON string.
+    Processes a single incoming message and returns the response as a JSON string.
+    Expected message format (JSON):
+      {
+        "function": "function_name",
+        "args": [...],
+        "kwargs": { ... }
+      }
     """
     logging.debug(f"Processing received message: {message}")
     response_dict = {}
     try:
-        if not message.strip():  # Check for empty or whitespace-only messages
+        if not isinstance(message, str) or not message.strip():
             raise ValueError("Received an empty or invalid message.")
 
         data = json.loads(message)
+        message_id = data.get("kwargs", {}).get("_run_test_id")
         function_name = data.get("function")
-        args = data.get("args", [])
-        kwargs = data.get("kwargs", {})
-        logging.info(f"Parsed data - function: {function_name}, args: {args}, kwargs: {kwargs}")
+        args = data.get("args", []) or []
+        kwargs = data.get("kwargs", {}) or {}
+        logging.info(f"Parsed data - id: {message_id}, function: {function_name}, args: {args}, kwargs: {kwargs}")
+
+        # Prepare base response with optional id for correlation.
+        response_dict = {"id": message_id} if message_id is not None else {}
 
         # Special handling for listing available methods.
         if function_name == "list_available_methods":
@@ -68,38 +99,56 @@ async def handle_message(message):
                     "args": arg_names,
                     "doc": func.__doc__ or ""
                 })
-            response_dict = {"status": "success", "methods": method_details}
-            logging.debug(f"Prepared list_available_methods response: {response_dict}")
+            response_dict.update({"status": "success", "methods": method_details, "id": message_id})
+            return json.dumps(response_dict)
 
         # If the requested function exists, call it.
-        elif function_name in FUNCTION_MAP:
+        if function_name in FUNCTION_MAP:
             func = FUNCTION_MAP[function_name]
             logging.debug(f"Calling function '{function_name}' with args: {args} and kwargs: {kwargs}")
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*args, **kwargs)
-            else:
-                try:
-                    result = func(*args, **kwargs)
-                    response_dict = {"status": "success", "result": result}
-                except Exception as e:
-                    response_dict = {"status": "error", "error": str(e)}
-            logging.debug(f"Function '{function_name}' executed successfully.")
+
+            try:
+                result = await call_maybe_blocking(func, *args, **kwargs)
+                response_dict.update({"status": "success", "result": result, "id": message_id})
+            except Exception as e:
+                logging.exception("Error while executing function")
+                response_dict.update({"status": "error", "error": str(e), "id": message_id})
         else:
-            response_dict = {"status": "error", "error": f"Unknown function: {function_name}"}
+            response_dict.update({"status": "error", "error": f"Unknown function: {function_name}", "id": message_id})
             logging.warning(f"Function not found: {function_name}")
 
     except json.JSONDecodeError:
         logging.error(f"Failed to decode JSON from message: {message}")
-        response_dict = {"status": "error", "error": "Invalid JSON received"}
+        response_dict = {"status": "error", "error": "Invalid JSON received", "id": message_id}
     except Exception as e:
-        logging.error(f"Error processing message: {e}", exc_info=True)
-        response_dict = {"status": "error", "error": str(e)}
+        logging.exception("Error processing message")
+        response_dict = {"status": "error", "error": str(e), "id": message_id}
 
     response_json = json.dumps(response_dict)
     logging.debug(f"Returning JSON response: {response_json}")
     return response_json
 
+async def handle_and_send(message, ws):
+    """
+    Wrapper that:
+      - Acquires semaphore (limits concurrency)
+      - Calls handle_message
+      - Sends the result back over the websocket
+    """
+    try:
+        async with SEM:
+            response_json = await handle_message(message)
+            # Send the response. websockets.send is async and can be awaited concurrently.
+            await ws.send(response_json)
+            logging.debug(f"Sent response: {response_json}")
+    except websockets.exceptions.ConnectionClosed:
+        logging.warning("WebSocket closed before we could send the response.")
+    except Exception:
+        logging.exception("Failed in handle_and_send")
 
+# -------------------------------------------------------------------
+# WebSocket connection & receive loop (spawns background tasks)
+# -------------------------------------------------------------------
 async def connect_to_backend(uri):
     logging.info(f"Connecting to WebSocket backend at {uri}")
     while True:
@@ -110,17 +159,12 @@ async def connect_to_backend(uri):
                     while True:
                         message = await ws.recv()
                         logging.debug(f"Message received from backend: {message}")
-
-                        response_json = await handle_message(message)
-
-                        logging.debug(f"Sending response to backend: {response_json}")
-                        await ws.send(response_json)
-
+                        asyncio.create_task(handle_and_send(message, ws))
                 except websockets.exceptions.ConnectionClosed as e:
-                    logging.error(f"Connection closed: {e.code} {e.reason}")
+                    logging.error(f"Connection closed: {getattr(e, 'code', '')} {getattr(e, 'reason', '')}")
                     break
                 except Exception as e:
-                    logging.error("Unexpected error during active connection", exc_info=True)
+                    logging.exception("Unexpected error during active connection")
                     try:
                         error_response = json.dumps({"status": "error", "error": f"Client-side error: {str(e)}"})
                         await ws.send(error_response)
@@ -130,9 +174,8 @@ async def connect_to_backend(uri):
 
         except (websockets.exceptions.WebSocketException, OSError) as e:
             logging.error(f"Failed to connect or connection lost: {e}")
-        except Exception as e:
-            logging.error("Unexpected error in connection logic", exc_info=True)
-
+        except Exception:
+            logging.exception("Unexpected error in connection logic")
         logging.info("Attempting to reconnect in 10 seconds...")
         await asyncio.sleep(10)
 
@@ -143,21 +186,17 @@ async def main():
         return
 
     logging.info(f"Using backend WebSocket URI: {backend_uri}")
+    logging.info(f"CONCURRENCY_LIMIT={CONCURRENCY_LIMIT}")
     while True:
         await connect_to_backend(backend_uri)
 
 if __name__ == "__main__":
-    # --- Add environment variable setup if needed ---
-    # Example: Set a default URI if the environment variable isn't present
-    # This is useful for local testing. Replace 'your_default_client_id'
-    # with an actual ID or mechanism to get one if required by your backend.
     if not os.getenv("BACKEND_WS_URI"):
         backend_uri = input("BACKEND_WS_URI not set. Please enter BACKEND_WS_URI: ")
         if not backend_uri:
             logging.error("No BACKEND_WS_URI provided, exiting.")
             sys.exit(1)
         os.environ["BACKEND_WS_URI"] = backend_uri
-    # --- ---
 
     try:
         asyncio.run(main())
