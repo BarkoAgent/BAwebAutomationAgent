@@ -2,7 +2,10 @@ import inspect
 import re
 import textwrap
 import os
+import random
+import string
 
+test_variables = {}
 driver = {}
 run_test_id = ""
 
@@ -25,25 +28,13 @@ def stop_all_drivers():
 
 def log_function_definition(fn, *args, **kwargs):
     """
-    Writes a transformed version of the function's source code to `function_calls.py`, removing:
-      1. The `def function_name(...):` line
-      2. Any `log_function_definition(...)` lines
-      3. Replacing param=param with param="actual_value" for each argument actually passed
-      4. Removing indentation
-      6. Removing lines that start with 'return' (i.e., removing all return statements)
-      7. Removing any triple-quoted docstrings, such as:
-         \"\"\"
-         This code is used like ...
-         \"\"\"
+    Writes a transformed version of the function's source code to `tests/function_calls{_run_test_id}.py`.
+    Removes def line, triple-quoted docstrings, global lines, return lines, calls to helper introspection funcs,
+    replaces param=param with the actual passed value, and replaces driver[_run_test_id] with driver.
     """
-
-    # 1. Grab the original function source
     source = inspect.getsource(fn)
-
-    # 2. Split into lines
     lines = source.splitlines()
 
-    # 3. Remove the first line if it starts with 'def '
     trimmed_lines = []
     skip_first_def = True
     for line in lines:
@@ -52,105 +43,74 @@ def log_function_definition(fn, *args, **kwargs):
             continue
         trimmed_lines.append(line)
 
-    # 4. Remove lines containing `log_function_definition(...)`,
-    #    lines that start with 'return', and lines that start with 'global'
-    #    Also track and remove triple-quoted docstrings.
     filtered_lines = []
     in_docstring = False
     for line in trimmed_lines:
         stripped_line = line.strip()
-
-        # Toggle docstring detection whenever we see triple quotes
         if '"""' in stripped_line:
             in_docstring = not in_docstring
-            # We skip the line that has the triple quotes too
             continue
-
-        # If we are inside a triple-quoted docstring, skip all those lines
         if in_docstring:
             continue
-
-        # remove lines that call log_function_definition(...)
-        if "log_function_definition(" in line:
+        if "log_function_definition(" in line or "stop_all_drivers()" in line or "clean_html(" in line:
             continue
-        if "stop_all_drivers()" in line:
+        if stripped_line.startswith("return") or stripped_line.startswith("global"):
             continue
-        # remove lines that call log_function_definition(...)
-        if "clean_html(" in line:
-            continue
-        # remove lines that start with "return"
-        if stripped_line.startswith("return"):
-            continue
-        # remove lines that start with "global"
-        if stripped_line.startswith("global"):
-            continue
-
         filtered_lines.append(line)
 
-    # 5. Replace references to parameters with actual values, e.g. param=param -> param="actual"
     from inspect import signature
     sig = signature(fn)
     param_names = list(sig.parameters.keys())
 
-    # Pair them up: param -> actual_value
     param_values = {}
-    # We'll assume *args align in order to param_names
     for name, val in zip(param_names, args):
         param_values[name] = val
-    # And also handle any named arguments in **kwargs
     for k, v in kwargs.items():
         param_values[k] = v
 
     replaced_lines = []
     for line in filtered_lines:
         new_line = line
-
-        # (A) Replace param=param with param="actual_val"
         for param, actual_val in param_values.items():
             pattern = rf"\b{param}={param}\b"
             repl = f'{param}={repr(actual_val)}'
             new_line = re.sub(pattern, repl, new_line)
-        
-        if "selenium_url" in new_line and kwargs['selenium_url'] is not None:
-            new_line = new_line.replace("selenium_url", repr(kwargs['selenium_url']))
-        # (A) Replace driver[_run_test_id] with driver
-        pattern = r"driver\[_run_test_id\]"
-        repl = f'driver'
-        new_line = re.sub(pattern, repl, new_line)
 
+        if "selenium_url" in new_line and kwargs.get('selenium_url') is not None:
+            new_line = new_line.replace("selenium_url", repr(kwargs['selenium_url']))
+
+        new_line = re.sub(r"driver\[_run_test_id\]", "driver", new_line)
         replaced_lines.append(new_line)
 
-    # 6. Dedent (remove indentation)
     dedented_code = textwrap.dedent("\n".join(replaced_lines)).rstrip() + "\n"
 
-    # Ensure the 'tests' directory exists; if not, create it.
     directory = "tests"
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    # Build the file path using os.path.join for portability.
-    file_path = os.path.join(directory, f"function_calls{kwargs['_run_test_id']}.py")
-
-    # 7. Append everything to function_calls.py in the tests directory
+    file_path = os.path.join(directory, f"function_calls{kwargs.get('_run_test_id', '1')}.py")
     with open(file_path, "a", encoding="utf-8") as f:
         f.write(dedented_code)
 
 ###############################################################################
-# Below are your selenium-related functions
+# Below are your selenium-related functions (fixed to consistently use global
+# driver/test_variables and to accept/use the _run_test_id param)
 ###############################################################################
 def create_driver(_run_test_id='1'):
     """
-    Creates a driver that is necessary for the automation to run in the first place.
-    Doesn't need any input values to the function and it returns success as string
+    Creates a driver and initializes test_variables for this run id.
+
+    Usage:
+        create_driver({})
     """
-    # pass no arguments
-    global driver
-    stop_all_drivers()
+    global driver, test_variables
+    test_variables[_run_test_id] = {}
     from selenium.webdriver.chrome.options import Options
     from testui.support.appium_driver import NewDriver
     options = Options()
     options.add_argument("disable-user-media-security")
     options.add_argument("disable-features=PasswordCheck,PasswordLeakDetection,SafetyCheck")
+    # options.add_argument("--headless")
 
     driver[_run_test_id] = (
         NewDriver()
@@ -163,22 +123,107 @@ def create_driver(_run_test_id='1'):
     return "driver created"
 
 
+def _expand_charset(spec):
+    """Return list of chars for a bracket charset like a-zA-Z0-9_."""
+    chars = []
+    i = 0
+    L = len(spec)
+    while i < L:
+        if i + 2 < L and spec[i+1] == '-':
+            start = spec[i]
+            end = spec[i+2]
+            chars.extend([chr(c) for c in range(ord(start), ord(end)+1)])
+            i += 3
+        else:
+            chars.append(spec[i])
+            i += 1
+    return chars
+
+def _generate_from_token(token, count):
+    """Generate 'count' chars for a token."""
+    if token == r'\d':
+        pool = string.digits
+    elif token == r'\w':
+        pool = string.ascii_letters + string.digits + '_'
+    elif token == '.':
+        pool = string.ascii_letters + string.digits
+    elif token.startswith('[') and token.endswith(']'):
+        pool = ''.join(_expand_charset(token[1:-1]))
+    else:
+        pool = token
+    return ''.join(random.choice(pool) for _ in range(count))
+
+def _generate_from_regex(pattern):
+    """
+    Lightweight regex-to-string generator supporting \d, \w, ., [a-z], and {n} quantifier.
+    """
+    out = []
+    token_re = re.compile(r'(\\d|\\w|\.|\[[^\]]+\]|.)' r'(?:\{(\d+)\})?')
+    pos = 0
+    for m in token_re.finditer(pattern):
+        if m.start() != pos:
+            gap = pattern[pos:m.start()]
+            out.append(gap)
+        token = m.group(1)
+        count = int(m.group(2)) if m.group(2) else 1
+        out.append(_generate_from_token(token, count))
+        pos = m.end()
+    if pos < len(pattern):
+        out.append(pattern[pos:])
+    return ''.join(out)
+
+
+def set_variable(name, value='', _run_test_id='1', regex_const=''):
+    """
+    Set a variable for the running test.
+
+    Usage:
+        set_variable({'name': 'username', 'value': 'alice'})
+        set_variable({'name': 'token', 'regex_const': '[A-Z]{3}\d{4}'})
+
+    - name: variable name (str)
+    - value: explicit value; if provided, it's stored as-is
+    - regex_const: optional simple regex-like construction to generate a random value. You can construct it like:
+        supporting ONLY \d, \w, ., [a-z], and {n} quantifier.
+    """
+    global test_variables
+    if _run_test_id not in test_variables:
+        test_variables[_run_test_id] = {}
+
+    if value != '':
+        test_variables[_run_test_id][name] = value
+        return test_variables[_run_test_id][name]
+
+    if regex_const:
+        generated = _generate_from_regex(regex_const)
+        test_variables[_run_test_id][name] = generated
+        return generated
+
+    test_variables[_run_test_id][name] = ''
+    return ''
+
+
 def stop_driver(_run_test_id='1'):
     """
-    Stops the driver so that later another one can take place,
-    and it's always run at the end of the test case.
-    Doesn't need any input values to the function and it returns success as string
+    Stops driver for given run id.
+
+    Usage:
+        stop_driver({})
     """
     global driver
-    driver[_run_test_id].quit()
-    log_function_definition(stop_driver, _run_test_id=_run_test_id)
-    return "success"
+    if _run_test_id in driver:
+        driver[_run_test_id].quit()
+        log_function_definition(stop_driver, _run_test_id=_run_test_id)
+        return "success"
+    return "no driver"
 
 
 def maximize_window(_run_test_id='1'):
     """
-    Maximizes the window to the biggest size of the screen.
-    :return Success maximizing
+    Maximizes the window for given run id.
+
+    Usage:
+        maximize_window({})
     """
     global driver
     driver[_run_test_id].get_driver().maximize_window()
@@ -186,37 +231,62 @@ def maximize_window(_run_test_id='1'):
     return "success maximizing"
 
 
-def add_cookie(name, value, _run_test_id='1'):
+def add_cookie(name, value, _run_test_id='1', use_vars='false'):
     """
-    adds cookie by name and value
-    :return "Cookies added"
+    Adds cookie by name and value.
+
+    Usage without variables:
+        add_cookie({'name': 'sessionid', 'value': 'abc123'})
+
+    Usage with variables:
+        set_variable({'name': 'cookie_name', 'value': 'sessionid'})
+        set_variable({'name': 'cookie_value', 'value': 'abc123'})
+        add_cookie({'name': 'cookie_name', 'value': 'cookie_value', 'use_vars': 'true'})
     """
-    global driver
-    name=name
-    value=value
+    global driver, test_variables
+    if use_vars == 'true' and _run_test_id in test_variables:
+        name = test_variables[_run_test_id].get(name, name)
+        value = test_variables[_run_test_id].get(value, value)
     driver[_run_test_id].get_driver().add_cookie({'name': name, 'value': value})
     log_function_definition(add_cookie, name, value, _run_test_id=_run_test_id)
     return "Cookies added"
 
 
-def navigate_to_url(url: str, _run_test_id='1') -> str:
+def navigate_to_url(url: str, _run_test_id='1', use_vars='false') -> str:
     """
-    Navigates the browser to a specific URL (the only parameter should have the format `https://...`).
-    Returns the url.
-    """
-    global driver
-    driver[_run_test_id].navigate_to(url=url)
+    Navigates the browser to a specific URL.
 
+    Usage without variables:
+        navigate_to_url({'url': 'https://example.com'})
+
+    Usage with variables:
+        set_variable({'name': 'home', 'value': 'https://example.com'})
+        navigate_to_url({'url': 'home', 'use_vars': True})
+    """
+    global driver, test_variables
+    if use_vars == 'true' and _run_test_id in test_variables:
+        url = test_variables[_run_test_id].get(url, url)
+    driver[_run_test_id].navigate_to(url=url)
     log_function_definition(navigate_to_url, url, _run_test_id=_run_test_id)
     return url
 
 
-def send_keys(locator_type: str, locator: str, value: str, _run_test_id='1') -> str:
+def send_keys(locator_type: str, locator: str, value: str, _run_test_id='1', use_vars: str = 'false') -> str:
     """
-    Types in the value in the element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated.
+    Types `value` into element specified by locator.
+
+    Usage without variables:
+        send_keys({'locator_type': 'css', 'locator': '#username', 'value': 'alice'})
+
+    Usage with variables:
+        set_variable({'name': 'u', 'value': 'alice'})
+        send_keys({'locator_type': 'css', 'locator': '#username', 'value': 'u', 'use_vars': 'true'})
     """
-    global driver
+    global driver, test_variables
+
+    if use_vars == 'true' and _run_test_id in test_variables:
+        value = test_variables[_run_test_id].get(value, value)
+
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).send_keys(value=value)
     log_function_definition(send_keys, locator_type, locator, value, _run_test_id=_run_test_id)
     return "sent keys"
@@ -224,42 +294,96 @@ def send_keys(locator_type: str, locator: str, value: str, _run_test_id='1') -> 
 
 def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    checks if element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated exists in the web page
+    Waits until element is visible (exists).
+
+    Usage:
+        exists({'locator_type': 'css', 'locator': '.nav'})
     """
     global driver
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_visible(seconds=10)
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
+def exists_with_text(text: str, exact: bool = True, _run_test_id='1', use_vars: str = 'false') -> str:
+    """
+    Asserts that an element containing the given text exists (uses XPath).
+
+    Usage (exact match):
+        exists_with_text({'text': 'Home'})
+
+    Usage (substring match):
+        exists_with_text({'text': 'Welcome', 'exact': False})
+
+    Usage with variables:
+        set_variable({'name': 'u', 'value': 'alice'})
+        send_keys({'locator_type': 'css', 'locator': '#username', 'value': 'u', 'use_vars': 'true'})
+    """
+    global driver
+
+    def _xpath_literal(s: str) -> str:
+        # Produce a safe XPath literal for s (handles quotes)
+        if "'" not in s:
+            return f"'{s}'"
+        if '"' not in s:
+            return f'"{s}"'
+        # both quotes present -> use concat()
+        parts = []
+        for part in s.split("'"):
+            parts.append(f"'{part}'")
+            parts.append('"\'"')  # literal single-quote
+        # last split adds an extra "'", remove trailing
+        return "concat(" + ",".join(parts[:-1]) + ")"
+
+    if use_vars == 'true' and _run_test_id in test_variables:
+        value = test_variables[_run_test_id].get(value, value)
+
+    if exact:
+        locator = f"//*[normalize-space(text())={_xpath_literal(text)}]"
+    else:
+        # contains over the string-value of the node (trimmed)
+        locator = f"//*[contains(normalize-space(.), {_xpath_literal(text)})]"
+
+    # Use the existing element helper with xpath locator and wait until visible
+    driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_visible(seconds=10)
+
+    log_function_definition(exists_with_text, text, exact, _run_test_id=_run_test_id)
+    return "exists (text)"
+
+
 def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    checks if element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated does NOT exist in the web page
+    Waits until element does NOT exist.
+
+    Usage:
+        does_not_exist({'locator_type': 'xpath', 'locator': '//div[@id=\"loading\"]'})
     """
     global driver
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_visible(seconds=10)
     log_function_definition(does_not_exist, locator_type, locator, _run_test_id=_run_test_id)
     return "doesn't exists"
 
+
 def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    scrolls until the element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated is visible in the web page
+    Scrolls until the element is visible in the viewport.
+
+    Usage:
+        scroll_to_element({'locator_type': 'css', 'locator': '#footer'})
     """
     global driver
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    current_driver_instance = driver[_run_test_id]
+    current_driver_instance = driver[_run_test_id].get_driver()
     current_driver_instance.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
     log_function_definition(scroll_to_element, locator_type, locator, _run_test_id=_run_test_id)
     return "scrolled"
 
+
 def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    Clicks in the element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated.
+    Clicks element and returns cleaned HTML after click.
 
-    It will return the HTML after clicking
+    Usage:
+        click({'locator_type': 'css', 'locator': 'nav'})
     """
     global driver
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
@@ -268,55 +392,72 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     html_content = clean_html(content)
     return html_content
 
+
 def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    Double clicks on the element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated.
+    Double clicks on element.
+
+    Usage:
+        double_click({'locator_type': 'xpath', 'locator': '//button[@id=\"save\"]'})
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    actions = ActionChains(driver[_run_test_id])
+    actions = ActionChains(driver[_run_test_id].get_driver())
     actions.double_click(element).perform()
     log_function_definition(double_click, locator_type, locator, _run_test_id=_run_test_id)
     return "double clicked"
 
+
 def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    Right clicks on the element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated.
+    Right clicks on element.
+
+    Usage:
+        right_click({'locator_type': 'css', 'locator': '.item .menu'})
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    actions = ActionChains(driver[_run_test_id])
+    actions = ActionChains(driver[_run_test_id].get_driver())
     actions.context_click(element).perform()
     log_function_definition(right_click, locator_type, locator, _run_test_id=_run_test_id)
     return "right clicked"
 
+
 def get_page_html(_run_test_id='1') -> str:
     """
-    Returns the full HTML of the page (cleaned) so that you can parse it for exists or
-    click, send_keys, etc. on some element.
+    Returns cleaned page HTML.
+
+    Usage:
+        get_page_html({})
     """
     global driver
     content = driver[_run_test_id].get_driver().page_source
     html_content = clean_html(content)
+    log_function_definition(get_page_html, _run_test_id=_run_test_id)
     return html_content
 
 
 def return_current_url(_run_test_id='1') -> str:
     """
-    Returns the current URL of the page.
+    Returns current URL.
+
+    Usage:
+        return_current_url({})
     """
     global driver
-    return driver[_run_test_id].get_driver().current_url
+    url = driver[_run_test_id].get_driver().current_url
+    log_function_definition(return_current_url, _run_test_id=_run_test_id)
+    return url
 
 
 def change_windows_tabs(_run_test_id='1') -> str:
     """
-    Change the tab or window used to a different one. 
-    It will return the new page html
+    Switches to another window/tab and returns cleaned HTML of the new active page.
+
+    Usage:
+        change_windows_tabs({})
     """
     global driver
     selenium_driver = driver[_run_test_id].get_driver()
@@ -324,7 +465,7 @@ def change_windows_tabs(_run_test_id='1') -> str:
     p = selenium_driver.current_window_handle
     chwd = selenium_driver.window_handles
     for w in chwd:
-        if(w!=p):
+        if w != p:
             selenium_driver.switch_to.window(w)
             break
     print("frame changed: " + selenium_driver.title)
@@ -333,47 +474,43 @@ def change_windows_tabs(_run_test_id='1') -> str:
     html_content = clean_html(content)
     return html_content
 
+
 def change_frame_by_id(frame_name, _run_test_id='1') -> str:
     """
     Switches focus to the specified frame or iframe, by index or name.
 
-    :Args:
-        - frame_name: The name of the window to switch to, an integer representing the index. 
-        if its just a new tab, the original normally is 0 and the new one would be 1
-    :Usage:
-        ::
-            change_tab('frame_name')
-            change_tab(1)
+    Usage:
+        change_frame_by_id({'frame_name': 'frame-name'})
+        change_frame_by_id({'frame_name': 1})
     """
     global driver
-    frame_name=frame_name
-    driver[_run_test_id].switch_to.frame(frame_name, _run_test_id=_run_test_id)
-    log_function_definition(change_frame_by_id, frame_name)
+    driver[_run_test_id].get_driver().switch_to.frame(frame_name)
+    log_function_definition(change_frame_by_id, frame_name, _run_test_id=_run_test_id)
     return "frame_changed"
+
 
 def change_frame_by_locator(locator_type: str = None, locator: str = None, _run_test_id='1') -> str:
     """
-    Switches focus to the specified iframe, by the locator.
+    Switches focus to the specified iframe by locator.
 
-    :Args:
-        - locator_type: str
-        - locator: str:
+    Usage:
+        change_frame_by_locator({'locator_type': 'css', 'locator': 'iframe#player'})
     """
     global driver
-    locator_type=locator_type
-    locator=locator
-    driver[_run_test_id].switch_to.frame(driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element())
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    driver[_run_test_id].get_driver().switch_to.frame(element)
     log_function_definition(change_frame_by_locator, locator_type, locator, _run_test_id=_run_test_id)
     return "frame_changed"
 
 
 def change_frame_to_original(_run_test_id='1') -> str:
     """
-    Switches focus to the original after using the change_frame. 
-    Can be different Tab or iFrame.
+    Switches focus back to the main document.
+
+    Usage:
+        change_frame_to_original({})
     """
-    # Notice we pass the actual values for all 3 parameters
     global driver
-    driver[_run_test_id].switch_to.default_content()
+    driver[_run_test_id].get_driver().switch_to.default_content()
     log_function_definition(change_frame_to_original, _run_test_id=_run_test_id)
     return "frame_changed"
