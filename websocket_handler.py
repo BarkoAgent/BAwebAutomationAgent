@@ -7,6 +7,10 @@ import os
 import agent_func
 import inspect
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # -------------------------
 # Configuration & Logging
 # -------------------------
