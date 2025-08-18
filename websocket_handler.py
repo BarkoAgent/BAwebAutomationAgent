@@ -161,7 +161,7 @@ async def connect_to_backend(uri):
         await asyncio.sleep(10)
 
 async def main_connect_ws():
-    backend_uri = 'ws://localhost:8345/ws/' + os.getenv("BACKEND_WS_URI", "default_client_id")
+    backend_uri = 'wss://beta.barkoagent.com/ws/' + os.getenv("BACKEND_WS_URI", "default_client_id")
     if not backend_uri.startswith("ws://") and not backend_uri.startswith("wss://"):
         logging.error(f"Invalid BACKEND_WS_URI: {backend_uri}. It must start with ws:// or wss://")
         return
