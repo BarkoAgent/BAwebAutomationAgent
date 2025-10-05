@@ -4,6 +4,7 @@ import textwrap
 import os
 import random
 import string
+import streaming
 
 test_variables = {}
 driver = {}
@@ -110,7 +111,8 @@ def create_driver(_run_test_id='1'):
     options = Options()
     options.add_argument("disable-user-media-security")
     options.add_argument("disable-features=PasswordCheck,PasswordLeakDetection,SafetyCheck")
-    # options.add_argument("--headless")
+    options.add_argument("--headless")
+    options.add_argument("--window-size=1280,800")
 
     driver[_run_test_id] = (
         NewDriver()
@@ -118,6 +120,7 @@ def create_driver(_run_test_id='1'):
         .set_browser('chrome')
         .set_selenium_driver(chrome_options=options)
     )
+    streaming.start_stream(driver[_run_test_id], run_id="1", fps=1.0, jpeg_quality=70)
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "driver created"
@@ -212,6 +215,10 @@ def stop_driver(_run_test_id='1'):
     """
     global driver
     if _run_test_id in driver:
+        try:
+            streaming.stop_stream("1")
+        except Exception:
+            print("Failed to stop stream cleanly")
         driver[_run_test_id].quit()
         log_function_definition(stop_driver, _run_test_id=_run_test_id)
         return "success"
