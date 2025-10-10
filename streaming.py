@@ -53,7 +53,6 @@ def _stream_worker(run_id: str, driver, fps: float, jpeg_quality: int, stop_even
                 jpeg_bytes = png_bytes
 
             with _LOCK:
-                logging.info(f"Captured frame for run_id={run_id}, size={len(jpeg_bytes)} bytes")
                 _LATEST_FRAMES[run_id] = (jpeg_bytes, time.time())
 
             stop_event.wait(interval)
@@ -71,8 +70,8 @@ def start_stream(driver, run_id: str = "1", fps: float = 1.0, jpeg_quality: int 
     with _LOCK:
         thread = _STREAM_THREADS.get(run_id)
         if thread and thread.is_alive():
-            logging.info(f"Stream already running for run_id={run_id}")
-            return
+            logging.info(f"Stream already running for run_id={run_id}. Stopping.")
+            stop_stream("1")
 
         stop_event = threading.Event()
         thread = threading.Thread(
