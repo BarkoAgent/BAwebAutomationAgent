@@ -1,4 +1,4 @@
-# Barko Agent - Simple Agent
+# Barko Agent - Web Automation
 
 
 ## Getting started
@@ -34,6 +34,7 @@ Before you run the Agent, you will need to get the `BACKEND_WS_URI`
 5. Copy the `uuid4` and save the project.
 6. Add you `uuid4` to the .env
 7. Run your agent
+8. (Optional) In Project Settings you can add the IP where the agent is running to have a live stream: `ws://IP:8081` - If its running in the same computer you can use `ws://localhost:8081`
 
 
 ## Your first prompt
