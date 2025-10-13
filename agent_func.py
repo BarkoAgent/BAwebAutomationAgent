@@ -4,6 +4,7 @@ import textwrap
 import os
 import random
 import string
+import streaming
 
 test_variables = {}
 driver = {}
@@ -110,14 +111,20 @@ def create_driver(_run_test_id='1'):
     options = Options()
     options.add_argument("disable-user-media-security")
     options.add_argument("disable-features=PasswordCheck,PasswordLeakDetection,SafetyCheck")
-    # options.add_argument("--headless")
-
+    options.add_argument("--window-size=1280,800")
+    options.page_load_strategy = 'eager'
     driver[_run_test_id] = (
         NewDriver()
         .set_logger()
         .set_browser('chrome')
-        .set_selenium_driver(chrome_options=options)
     )
+    if os.getenv("SELENIUM_URL"):
+        driver[_run_test_id] = driver[_run_test_id].set_remote_url(os.getenv("SELENIUM_URL"))
+    else:
+        options.add_argument("--headless")
+    streaming.stop_stream("1")
+    driver[_run_test_id] = driver[_run_test_id].set_selenium_driver(chrome_options=options)
+    streaming.start_stream(driver[_run_test_id], run_id="1", fps=10.0, jpeg_quality=70)
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "driver created"
@@ -212,6 +219,10 @@ def stop_driver(_run_test_id='1'):
     """
     global driver
     if _run_test_id in driver:
+        try:
+            streaming.stop_stream("1")
+        except Exception:
+            print("Failed to stop stream cleanly")
         driver[_run_test_id].quit()
         log_function_definition(stop_driver, _run_test_id=_run_test_id)
         return "success"
@@ -300,7 +311,7 @@ def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
         exists({'locator_type': 'css', 'locator': '.nav'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_visible(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
@@ -344,7 +355,7 @@ def exists_with_text(text: str, exact: bool = True, _run_test_id='1', use_vars: 
         locator = f"//*[contains(normalize-space(.), {_xpath_literal(text)})]"
 
     # Use the existing element helper with xpath locator and wait until visible
-    driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_visible(seconds=10)
+    driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=10)
 
     log_function_definition(exists_with_text, text, exact, _run_test_id=_run_test_id)
     return "exists (text)"
@@ -358,7 +369,7 @@ def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
         does_not_exist({'locator_type': 'xpath', 'locator': '//div[@id=\"loading\"]'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_visible(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=10)
     log_function_definition(does_not_exist, locator_type, locator, _run_test_id=_run_test_id)
     return "doesn't exists"
 
@@ -371,6 +382,7 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
         scroll_to_element({'locator_type': 'css', 'locator': '#footer'})
     """
     global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     current_driver_instance = driver[_run_test_id].get_driver()
     current_driver_instance.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
@@ -380,17 +392,20 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
 
 def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    Clicks element and returns cleaned HTML after click.
+    Clicks in the element defined by its `locator_type` (id, css, xpath)
+    and its locator path associated.
 
-    Usage:
-        click({'locator_type': 'css', 'locator': 'nav'})
+    It will return a string saying clicked successfully on the element
     """
     global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(1)
+    from selenium.webdriver.common.action_chains import ActionChains
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    actions = ActionChains(driver[_run_test_id])
+    actions.move_to_element(element).perform()
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
-    log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
-    content = driver[_run_test_id].get_driver().page_source
-    html_content = clean_html(content)
-    return html_content
+    log_function_definition(click, locator_type, locator)
+    return "clicked successfully on the element"
 
 
 def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
@@ -402,6 +417,7 @@ def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
     actions.double_click(element).perform()
@@ -418,6 +434,7 @@ def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
     actions.context_click(element).perform()
@@ -514,3 +531,24 @@ def change_frame_to_original(_run_test_id='1') -> str:
     driver[_run_test_id].get_driver().switch_to.default_content()
     log_function_definition(change_frame_to_original, _run_test_id=_run_test_id)
     return "frame_changed"
+
+def login_to_barko(_run_test_id='1') -> str:
+    """
+    Logs into Barko dashboard with provided email and password.
+    """
+    global driver
+    email = "alvaro.laserna@testdevlab.com"
+    password = "12Parole"
+    driver[_run_test_id].navigate_to("https://stg-lalama.tdlbox.com/login")
+    driver[_run_test_id].e(locator_type="id", locator="emailOrUsername").wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type="id", locator="emailOrUsername").send_keys(value=email)
+    driver[_run_test_id].e(locator_type="id", locator="password").send_keys(value=password)
+    driver[_run_test_id].e(locator_type="css", locator=".login-button").click()
+    return "success login"
+
+def get_current_timestamp() -> str:
+    """
+    Returns current timestamp as string.
+    """
+    import time
+    return str(int(time.time()))

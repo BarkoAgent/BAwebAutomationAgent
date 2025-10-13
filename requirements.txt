@@ -1,4 +1,6 @@
 fastapi
 websockets==10.4
 requests
-python-testui
+python-testui==1.2.5
+aiohttp
+python-dotenv
