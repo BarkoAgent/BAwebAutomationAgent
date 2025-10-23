@@ -531,24 +531,3 @@ def change_frame_to_original(_run_test_id='1') -> str:
     driver[_run_test_id].get_driver().switch_to.default_content()
     log_function_definition(change_frame_to_original, _run_test_id=_run_test_id)
     return "frame_changed"
-
-def login_to_barko(_run_test_id='1') -> str:
-    """
-    Logs into Barko dashboard with provided email and password.
-    """
-    global driver
-    email = "alvaro.laserna@testdevlab.com"
-    password = "12Parole"
-    driver[_run_test_id].navigate_to("https://stg-lalama.tdlbox.com/login")
-    driver[_run_test_id].e(locator_type="id", locator="emailOrUsername").wait_until_exists(seconds=10)
-    driver[_run_test_id].e(locator_type="id", locator="emailOrUsername").send_keys(value=email)
-    driver[_run_test_id].e(locator_type="id", locator="password").send_keys(value=password)
-    driver[_run_test_id].e(locator_type="css", locator=".login-button").click()
-    return "success login"
-
-def get_current_timestamp() -> str:
-    """
-    Returns current timestamp as string.
-    """
-    import time
-    return str(int(time.time()))
