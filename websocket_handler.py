@@ -119,7 +119,7 @@ async def stream_latest_frames(
                             envelope = _make_envelope(header, frame_bytes)
                             try:
                                 await ws.send(envelope)
-                                logging.debug(f"Sent frame seq={header['seq']} len={len(frame_bytes)} for id={run_id}")
+                                logging.info(f"Sent frame seq={header['seq']} len={len(frame_bytes)} for id={run_id}")
                                 last_sent_ts = now
                             except websockets.exceptions.ConnectionClosed:
                                 logging.warning("WebSocket closed while sending frame; breaking to reconnect")

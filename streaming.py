@@ -29,15 +29,15 @@ def _png_to_jpeg_bytes(png_bytes: bytes, quality: int = 80) -> bytes:
     return enc.tobytes()
 
 
-def _stream_worker(run_id: str, driver, fps: float, jpeg_quality: int, stop_event: threading.Event):
+def _stream_worker(run_id: str, driver, fps: float, jpeg_quality: int, stop_event: threading.Event, stop_timeout: Optional[float] = None):
     """
     Worker thread: captures screenshots, converts to jpeg, stores latest bytes.
     """
     interval = 1.0 / max(0.1, fps)
     logging.info(f"Stream worker started for run_id={run_id} fps={fps}")
-
+    time_started = time.time()
     try:
-        while not stop_event.is_set():
+        while not stop_event.is_set() and (stop_timeout is None or (time.time() - time_started) < stop_timeout):
             try:
                 png_bytes = driver.get_driver().get_screenshot_as_png()
             except Exception:
@@ -62,21 +62,30 @@ def _stream_worker(run_id: str, driver, fps: float, jpeg_quality: int, stop_even
         logging.info(f"Stream worker exiting for run_id={run_id}")
 
 
-def start_stream(driver, run_id: str = "1", fps: float = 1.0, jpeg_quality: int = 70) -> None:
+def start_stream(driver, run_id: str = "1", fps: float = 1.0, jpeg_quality: int = 70, stop_timeout: Optional[float] = 180.0) -> None:
     """
     Start background thread capturing screenshots from `driver` for `run_id`.
-    No-op if already running.
+    No-op if already running. If an existing thread is found, signal it to stop and wait
+    up to `stop_timeout` seconds for it to exit before starting a new one.
     """
     with _LOCK:
         thread = _STREAM_THREADS.get(run_id)
         if thread and thread.is_alive():
-            logging.info(f"Stream already running for run_id={run_id}. Stopping.")
-            stop_stream("1")
+            logging.info(f"Stream already running for run_id={run_id}. Stopping (timeout={stop_timeout}).")
+            # call stop_stream which will join up to timeout
+            # drop the lock before blocking inside stop_stream (stop_stream handles locking)
+
+    with _LOCK:
+        # Double-check: maybe another caller started a thread meanwhile
+        thread = _STREAM_THREADS.get(run_id)
+        if thread and thread.is_alive():
+            logging.warning(f"Unable to start new stream for run_id={run_id} because an existing thread is still alive")
+            return
 
         stop_event = threading.Event()
         thread = threading.Thread(
             target=_stream_worker,
-            args=(run_id, driver, fps, jpeg_quality, stop_event),
+            args=(run_id, driver, fps, jpeg_quality, stop_event, stop_timeout),
             daemon=True,
             name=f"stream-{run_id}"
         )
