@@ -82,7 +82,7 @@ async def stream_latest_frames(
 
     while True:
         try:
-            async with websockets.connect(ws_uri) as ws:
+            async with websockets.connect(ws_uri + run_id) as ws:
                 logging.info("Connected to backend for streaming frames")
 
                 # Streaming loop

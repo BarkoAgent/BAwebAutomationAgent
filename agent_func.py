@@ -162,7 +162,7 @@ def _generate_from_token(token, count):
 
 def _generate_from_regex(pattern):
     """
-    Lightweight regex-to-string generator supporting \d, \w, ., [a-z], and {n} quantifier.
+    Lightweight regex-to-string generator supporting \\d, \\w, ., [a-z], and {n} quantifier.
     """
     out = []
     token_re = re.compile(r'(\\d|\\w|\.|\[[^\]]+\]|.)' r'(?:\{(\d+)\})?')
@@ -186,12 +186,12 @@ def set_variable(name, value='', _run_test_id='1', regex_const=''):
 
     Usage:
         set_variable({'name': 'username', 'value': 'alice'})
-        set_variable({'name': 'token', 'regex_const': '[A-Z]{3}\d{4}'})
+        set_variable({'name': 'token', 'regex_const': '[A-Z]{3}\\d{4}'})
 
     - name: variable name (str)
     - value: explicit value; if provided, it's stored as-is
     - regex_const: optional simple regex-like construction to generate a random value. You can construct it like:
-        supporting ONLY \d, \w, ., [a-z], and {n} quantifier.
+        supporting ONLY \\d, \\w, ., [a-z], and {n} quantifier.
     """
     global test_variables
     if _run_test_id not in test_variables:
@@ -531,3 +531,76 @@ def change_frame_to_original(_run_test_id='1') -> str:
     driver[_run_test_id].get_driver().switch_to.default_content()
     log_function_definition(change_frame_to_original, _run_test_id=_run_test_id)
     return "frame_changed"
+
+import os
+import requests
+from selenium.webdriver.common.by import By
+
+def login_api(user_key, _run_test_id='1'):
+    """
+    user_key: 'automateduser1_1' or 'automateduser1_2'
+    by default use automateduser1_2
+    Logs in via API and stores JWT and locale in localStorage.
+    """
+    global test_variables, driver
+    # Example: load from environment or a config file
+    test_users = {
+        "automateduser1_1": {"userId": "automateduser1-2", "userName": "automateduser1-2"},
+        "automateduser1_2": {"userId": "automateduser1-2", "userName": "automateduser1-2"},
+    }
+    user = test_users[user_key]
+    base_url = os.getenv("MARKETPLACE_BASE_URL", "https://m-autocom-dk.staging2.asysdev.com/")
+    api_env_url = os.getenv("API_ENV_URL", base_url)
+
+    env_config = {
+        "staging2": {
+            "userId": user["userName"],
+            "apiUrl": f"{api_env_url}/rest/users/login",
+            "appHost": "m-autocom-dk.staging2.asysdev.com",
+        },
+    }
+    current_env = "staging2"
+    if "dev1" in base_url:
+        current_env = "dev1"
+    elif "staging2" in base_url:
+        current_env = "staging2"
+    elif "autocom.dk" in base_url:
+        current_env = "production"
+    config = env_config[current_env]
+
+    user_pwd = os.getenv("DEFAULT_COMPANY1_PWD") if user_key == "automateduser1_1" else os.getenv("DEFAULT_COMPANY2_PWD")
+    payload = {
+        "username": config["userId"],
+        "password": user_pwd,
+    }
+    print(f"Logging in user '{config['userId']}', pwd '{user_pwd}' to '{config['apiUrl']}'")
+    headers = {
+        "X-Autorola-App-Host": config["appHost"],
+    }
+    response = requests.post(config["apiUrl"], json=payload, headers=headers)
+    response.raise_for_status()
+    token = response.json()["authenticationToken"]
+    # Store in globals for later use
+    test_variables[_run_test_id]["bearerToken"] = token
+    # Set in localStorage via Selenium
+    driver[_run_test_id].get_driver().execute_script(
+        'window.localStorage.setItem("autorola.locale", arguments[0]);', '"en_GB_d1"'
+    )
+    driver[_run_test_id].get_driver().execute_script(
+        'window.localStorage.setItem("autorola.JWT", arguments[0]);', f'"{token}"'
+    )
+    return "login_api success"
+
+
+def click_link_url_contains(partial_url, _run_test_id='1'):
+    """
+    Clicks the first visible link whose href contains the given substring.
+    """
+    global driver
+    d = driver[_run_test_id].get_driver()
+    links = d.find_elements(By.CSS_SELECTOR, 'a[href]')
+    for link in links:
+        if partial_url in link.get_attribute("href") and link.is_displayed():
+            link.click()
+            return "clicked link"
+    raise Exception(f"No visible link found containing '{partial_url}'")
