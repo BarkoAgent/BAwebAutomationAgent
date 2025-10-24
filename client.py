@@ -13,16 +13,17 @@ load_dotenv()
 async def start_streaming_loop():
     backend_uri = 'wss://beta.barkoagent.com/ws/' + os.getenv("BACKEND_WS_URI", "default_client_id")
     run_id = "1"
-    await stream_latest_frames(
-        ws_uri=backend_uri,
-        run_id=run_id,
-        get_latest_frame=get_latest_frame,
-        interval=1,  # Adjust as needed
-        send_start_end_control=True,
-        retry_connect_delay=5.0,
-        max_idle_seconds=None,
-        use_hash_dedup=True
-    )
+    while True:
+        await stream_latest_frames(
+            ws_uri=backend_uri,
+            run_id=run_id,
+            get_latest_frame=get_latest_frame,
+            interval=1,  # Adjust as needed
+            send_start_end_control=True,
+            retry_connect_delay=5.0,
+            max_idle_seconds=None,
+            use_hash_dedup=True
+        )
 
 async def main():
     await asyncio.gather(

@@ -153,7 +153,8 @@ async def stream_latest_frames(
             continue
         except asyncio.CancelledError:
             logging.info("stream_latest_frames cancelled externally")
-            raise
+            await asyncio.sleep(retry_connect_delay)
+            break
         except Exception:
             logging.exception("Unexpected error in stream_latest_frames; will attempt to reconnect")
             await asyncio.sleep(retry_connect_delay)
