@@ -5,9 +5,10 @@ import os
 import random
 import string
 import streaming
+from testui.support.testui_driver import TestUIDriver
 
 test_variables = {}
-driver = {}
+driver: dict[str, TestUIDriver] = {}
 run_test_id = ""
 
 
@@ -121,10 +122,11 @@ def create_driver(_run_test_id='1'):
     if os.getenv("SELENIUM_URL"):
         driver[_run_test_id] = driver[_run_test_id].set_remote_url(os.getenv("SELENIUM_URL"))
     else:
+        pass
         options.add_argument("--headless")
     streaming.stop_stream("1")
     driver[_run_test_id] = driver[_run_test_id].set_selenium_driver(chrome_options=options)
-    streaming.start_stream(driver[_run_test_id], run_id="1", fps=10.0, jpeg_quality=70)
+    streaming.start_stream(driver[_run_test_id], run_id="1", fps=1.0, jpeg_quality=70)
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "driver created"
@@ -162,7 +164,7 @@ def _generate_from_token(token, count):
 
 def _generate_from_regex(pattern):
     """
-    Lightweight regex-to-string generator supporting \d, \w, ., [a-z], and {n} quantifier.
+    Lightweight regex-to-string generator supporting \\d, \\w, ., [a-z], and {n} quantifier.
     """
     out = []
     token_re = re.compile(r'(\\d|\\w|\.|\[[^\]]+\]|.)' r'(?:\{(\d+)\})?')
@@ -186,12 +188,12 @@ def set_variable(name, value='', _run_test_id='1', regex_const=''):
 
     Usage:
         set_variable({'name': 'username', 'value': 'alice'})
-        set_variable({'name': 'token', 'regex_const': '[A-Z]{3}\d{4}'})
+        set_variable({'name': 'token', 'regex_const': '[A-Z]{3}\\d{4}'})
 
     - name: variable name (str)
     - value: explicit value; if provided, it's stored as-is
     - regex_const: optional simple regex-like construction to generate a random value. You can construct it like:
-        supporting ONLY \d, \w, ., [a-z], and {n} quantifier.
+        supporting ONLY \\d, \\w, ., [a-z], and {n} quantifier.
     """
     global test_variables
     if _run_test_id not in test_variables:
