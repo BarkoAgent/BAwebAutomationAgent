@@ -317,49 +317,22 @@ def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
-def exists_with_text(text: str, exact: bool = True, _run_test_id='1', use_vars: str = 'false') -> str:
+def exists_with_text(text: str, _run_test_id='1', use_vars: str = 'false') -> str:
     """
     Asserts that an element containing the given text exists (uses XPath).
-
-    Usage (exact match):
-        exists_with_text({'text': 'Home'})
-
     Usage (substring match):
-        exists_with_text({'text': 'Welcome', 'exact': False})
+        exists_with_text({'text': 'Welcome'})
 
     Usage with variables:
         set_variable({'name': 'u', 'value': 'alice'})
-        send_keys({'locator_type': 'css', 'locator': '#username', 'value': 'u', 'use_vars': 'true'})
+        exists_with_text({'text': 'u', 'use_vars': 'true'})
     """
     global driver
-
-    def _xpath_literal(s: str) -> str:
-        # Produce a safe XPath literal for s (handles quotes)
-        if "'" not in s:
-            return f"'{s}'"
-        if '"' not in s:
-            return f'"{s}"'
-        # both quotes present -> use concat()
-        parts = []
-        for part in s.split("'"):
-            parts.append(f"'{part}'")
-            parts.append('"\'"')  # literal single-quote
-        # last split adds an extra "'", remove trailing
-        return "concat(" + ",".join(parts[:-1]) + ")"
-
     if use_vars == 'true' and _run_test_id in test_variables:
-        value = test_variables[_run_test_id].get(value, value)
-
-    if exact:
-        locator = f"//*[normalize-space(text())={_xpath_literal(text)}]"
-    else:
-        # contains over the string-value of the node (trimmed)
-        locator = f"//*[contains(normalize-space(.), {_xpath_literal(text)})]"
-
-    # Use the existing element helper with xpath locator and wait until visible
+        text = test_variables[_run_test_id].get(text, text)
+    locator = f"//*[contains(text(), '{text}')]"
     driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=10)
-
-    log_function_definition(exists_with_text, text, exact, _run_test_id=_run_test_id)
+    log_function_definition(exists_with_text, text, _run_test_id=_run_test_id)
     return "exists (text)"
 
 
