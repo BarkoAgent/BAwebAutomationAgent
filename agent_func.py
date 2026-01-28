@@ -4,6 +4,7 @@ import textwrap
 import os
 import random
 import string
+import base64
 import streaming
 from testui.support.testui_driver import TestUIDriver
 
@@ -126,7 +127,7 @@ def create_driver(_run_test_id='1'):
         options.add_argument("--headless")
     streaming.stop_stream("1")
     driver[_run_test_id] = driver[_run_test_id].set_selenium_driver(chrome_options=options)
-    streaming.start_stream(driver[_run_test_id], run_id="1", fps=1.0, jpeg_quality=70)
+    streaming.start_stream(driver[_run_test_id], run_id="1", fps=5.0, jpeg_quality=70)
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "driver created"
@@ -533,3 +534,110 @@ def change_frame_to_original(_run_test_id='1') -> str:
     driver[_run_test_id].get_driver().switch_to.default_content()
     log_function_definition(change_frame_to_original, _run_test_id=_run_test_id)
     return "frame_changed"
+
+
+def start_frame_recording(_run_test_id='1') -> str:
+    """
+    Starts persisting (recording) frames for the given run_id.
+
+    Usage:
+        start_frame_recording({})
+    """
+    streaming.start_recording(_run_test_id)
+    log_function_definition(start_frame_recording, _run_test_id=_run_test_id)
+    return "recording started"
+
+
+def stop_frame_recording(_run_test_id='1') -> str:
+    """
+    Stops persisting (recording) frames for the given run_id.
+
+    Usage:
+        stop_frame_recording({})
+    """
+    streaming.stop_recording(_run_test_id)
+    log_function_definition(stop_frame_recording, _run_test_id=_run_test_id)
+    return "recording stopped"
+
+
+def get_recorded_frames(_run_test_id='1', since_seq: int = 0, limit: int = 50):
+    """
+    Retrieves persisted frames with cursor-based pagination.
+    
+    Args:
+        _run_test_id: Execution identifier
+        since_seq: Return only frames with seq >= since_seq (default: 0)
+        limit: Max frames to return (default: 50)
+    
+    Returns:
+        List of dicts: [{'seq': int, 'timestamp': float, 'data': base64_str}, ...]
+
+    Usage:
+        get_recorded_frames({'since_seq': 0, 'limit': 50})
+    """
+    try:
+        if since_seq == "":
+            since_seq = 0
+        else:
+            since_seq = int(since_seq)
+            
+        if limit == "":
+            limit = 50
+        else:
+            limit = int(limit)
+    except (ValueError, TypeError):
+        since_seq = 0
+        limit = 50
+
+    frames = streaming.get_recorded_frames(_run_test_id, since_seq=since_seq, limit=limit)
+    print(f"DEBUG: get_recorded_frames({_run_test_id}, since_seq={since_seq}, limit={limit}) found {len(frames)} frames")
+    
+    result = []
+    for frame in frames:
+        b64_str = base64.b64encode(frame["data"]).decode('utf-8')
+        result.append({
+            'seq': frame["seq"],
+            'timestamp': frame["timestamp"],
+            'data': b64_str
+        })
+    
+    log_function_definition(get_recorded_frames, _run_test_id=_run_test_id, since_seq=since_seq, limit=limit)
+    return result
+
+
+def ack_recorded_frames(_run_test_id='1', up_to_seq: int = 0) -> str:
+    """
+    Acknowledge frames up to and including up_to_seq.
+    ACK'd frames are freed from memory and will not be returned in future calls.
+    
+    Args:
+        _run_test_id: Execution identifier
+        up_to_seq: ACK all frames with seq <= up_to_seq
+    
+    Usage:
+        ack_recorded_frames({'up_to_seq': 10})
+    """
+    try:
+        if up_to_seq == "":
+            up_to_seq = 0
+        else:
+            up_to_seq = int(up_to_seq)
+    except (ValueError, TypeError):
+        up_to_seq = 0
+
+    streaming.ack_recorded_frames(_run_test_id, up_to_seq=up_to_seq)
+    log_function_definition(ack_recorded_frames, _run_test_id=_run_test_id, up_to_seq=up_to_seq)
+    return "frames acknowledged"
+
+
+def clear_frame_recording(_run_test_id='1') -> str:
+    """
+    Clears all persisted frames and resets seq counter for the given run_id.
+    Use this to fully reset recording state.
+
+    Usage:
+        clear_frame_recording({})
+    """
+    streaming.clear_recorded_frames(_run_test_id)
+    log_function_definition(clear_frame_recording, _run_test_id=_run_test_id)
+    return "recording cleared"

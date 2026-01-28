@@ -10,9 +10,14 @@ import cv2
 _STREAM_THREADS = {}       # run_id -> Thread
 _STREAM_FLAGS = {}         # run_id -> threading.Event (stop flag)
 _LATEST_FRAMES = {}        # run_id -> (jpeg_bytes, timestamp)
+_RECORDING_FLAGS = set()   # set of run_ids currently recording
+_RECORDED_FRAMES = {}      # run_id -> list of {seq, timestamp, data (bytes)}
+_SEQ_COUNTERS = {}         # run_id -> next seq number
+_ACKED_UP_TO = {}          # run_id -> last acked seq (-1 means none acked)
 _LOCK = threading.Lock()
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
+logging.getLogger("urllib3").setLevel(logging.ERROR)
 
 
 def _png_to_jpeg_bytes(png_bytes: bytes, quality: int = 80) -> bytes:
@@ -54,6 +59,20 @@ def _stream_worker(run_id: str, driver, fps: float, jpeg_quality: int, stop_even
 
             with _LOCK:
                 _LATEST_FRAMES[run_id] = (jpeg_bytes, time.time())
+                
+                # Store frames under ALL active recording IDs with seq numbers
+                for rec_id in list(_RECORDING_FLAGS):
+                    if rec_id not in _RECORDED_FRAMES:
+                        _RECORDED_FRAMES[rec_id] = []
+                        _SEQ_COUNTERS[rec_id] = 0
+                    
+                    seq = _SEQ_COUNTERS[rec_id]
+                    _RECORDED_FRAMES[rec_id].append({
+                        "seq": seq,
+                        "timestamp": time.time(),
+                        "data": jpeg_bytes  # stored as bytes, encoded to base64 in agent_func
+                    })
+                    _SEQ_COUNTERS[rec_id] = seq + 1
 
             stop_event.wait(interval)
     except Exception:
@@ -105,13 +124,16 @@ def stop_stream(run_id: str) -> None:
 
     if stop_event:
         stop_event.set()
-    if thread:
-        thread.join(timeout=2.0)
+        if thread:
+            thread.join(timeout=2.0)
 
     with _LOCK:
         _STREAM_FLAGS.pop(run_id, None)
         _STREAM_THREADS.pop(run_id, None)
         _LATEST_FRAMES.pop(run_id, None)
+        # We generally do NOT clear recorded frames here,
+        # so they can be retrieved after driver stops.
+        # user can call clear_recorded_frames explicitly.
 
     logging.info(f"Stopped stream for run_id={run_id}")
 
@@ -122,7 +144,87 @@ def get_latest_frame(run_id: str) -> Optional[bytes]:
     """
     with _LOCK:
         item = _LATEST_FRAMES.get(run_id)
-        _LATEST_FRAMES.pop(run_id, None)
+        # _LATEST_FRAMES.pop(run_id, None) # Don't pop if you want to reuse it?
+        # Original code popped it. Sticking to original behavior for streaming.
         if item is None:
             return None
         return item[0]
+
+
+# -------------------------------------------------------------------------
+# Recording / Persistence Logic
+# -------------------------------------------------------------------------
+
+def start_recording(run_id: str) -> None:
+    """
+    Enable recording (persistence) of frames for this run_id.
+    """
+    with _LOCK:
+        _RECORDING_FLAGS.add(run_id)
+        if run_id not in _RECORDED_FRAMES:
+            _RECORDED_FRAMES[run_id] = []
+        if run_id not in _SEQ_COUNTERS:
+            _SEQ_COUNTERS[run_id] = 0
+        if run_id not in _ACKED_UP_TO:
+            _ACKED_UP_TO[run_id] = -1
+    logging.info(f"Started recording frames for run_id={run_id}")
+
+def stop_recording(run_id: str) -> None:
+    """
+    Disable recording of frames for this run_id.
+    """
+    with _LOCK:
+        _RECORDING_FLAGS.discard(run_id)
+    logging.info(f"Stopped recording frames for run_id={run_id}")
+
+def get_recorded_frames(run_id: str, since_seq: int = 0, limit: int = 50):
+    """
+    Return frames where seq >= since_seq and seq > last_acked.
+    Returns at most `limit` frames, ordered by seq ascending.
+    """
+    with _LOCK:
+        frames = _RECORDED_FRAMES.get(run_id, [])
+        acked = _ACKED_UP_TO.get(run_id, -1)
+        
+        # Filter: seq > acked AND seq >= since_seq
+        filtered = [
+            f for f in frames 
+            if f["seq"] > acked and f["seq"] >= since_seq
+        ]
+        
+        # Sort by seq and limit
+        filtered.sort(key=lambda f: f["seq"])
+        return filtered[:limit]
+
+
+def ack_recorded_frames(run_id: str, up_to_seq: int) -> None:
+    """
+    Acknowledge frames up to and including up_to_seq.
+    These frames will be excluded from future get_recorded_frames calls
+    and can be garbage collected.
+    """
+    with _LOCK:
+        _ACKED_UP_TO[run_id] = max(
+            _ACKED_UP_TO.get(run_id, -1),
+            up_to_seq
+        )
+        
+        # Actually remove acked frames to free memory
+        if run_id in _RECORDED_FRAMES:
+            _RECORDED_FRAMES[run_id] = [
+                f for f in _RECORDED_FRAMES[run_id]
+                if f["seq"] > up_to_seq
+            ]
+    
+    logging.info(f"ACK'd frames up to seq={up_to_seq} for run_id={run_id}")
+
+
+def clear_recorded_frames(run_id: str) -> None:
+    """
+    Clear all recorded frames and reset seq counter for the given run_id.
+    """
+    with _LOCK:
+        _RECORDED_FRAMES.pop(run_id, None)
+        _SEQ_COUNTERS.pop(run_id, None)
+        _ACKED_UP_TO.pop(run_id, None)
+    logging.info(f"Cleared recorded frames for run_id={run_id}")
