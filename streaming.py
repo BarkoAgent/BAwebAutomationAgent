@@ -2,9 +2,16 @@
 import threading
 import time
 import logging
+import os
 from typing import Optional
 import numpy as np
 import cv2
+
+# Configuration (env-overrideable)
+RECORDING_TTL_SECONDS = int(os.getenv("RECORDING_TTL_SECONDS", "300"))
+MAX_ACTIVE_RECORDINGS = int(os.getenv("MAX_ACTIVE_RECORDINGS", "3"))
+MAX_FRAMES_PER_RECORDING = int(os.getenv("MAX_FRAMES_PER_RECORDING", "1000"))
+RECORDING_GC_INTERVAL = int(os.getenv("RECORDING_GC_INTERVAL", "30"))
 
 # Globals
 _STREAM_THREADS = {}       # run_id -> Thread
@@ -14,7 +21,9 @@ _RECORDING_FLAGS = set()   # set of run_ids currently recording
 _RECORDED_FRAMES = {}      # run_id -> list of {seq, timestamp, data (bytes)}
 _SEQ_COUNTERS = {}         # run_id -> next seq number
 _ACKED_UP_TO = {}          # run_id -> last acked seq (-1 means none acked)
+_LAST_FRAME_AT = {}        # run_id -> timestamp of last frame capture
 _LOCK = threading.Lock()
+_GC_STARTED = False
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s: %(message)s')
 logging.getLogger("urllib3").setLevel(logging.ERROR)
@@ -62,6 +71,12 @@ def _stream_worker(run_id: str, driver, fps: float, jpeg_quality: int, stop_even
                 
                 # Store frames under ALL active recording IDs with seq numbers
                 for rec_id in list(_RECORDING_FLAGS):
+                    # Hard limit: max frames per recording
+                    if len(_RECORDED_FRAMES.get(rec_id, [])) >= MAX_FRAMES_PER_RECORDING:
+                        logging.warning(f"[LIMIT] Recording {rec_id} exceeded MAX_FRAMES_PER_RECORDING ({MAX_FRAMES_PER_RECORDING}). Auto-stopping.")
+                        _RECORDING_FLAGS.discard(rec_id)
+                        continue
+                    
                     if rec_id not in _RECORDED_FRAMES:
                         _RECORDED_FRAMES[rec_id] = []
                         _SEQ_COUNTERS[rec_id] = 0
@@ -70,9 +85,10 @@ def _stream_worker(run_id: str, driver, fps: float, jpeg_quality: int, stop_even
                     _RECORDED_FRAMES[rec_id].append({
                         "seq": seq,
                         "timestamp": time.time(),
-                        "data": jpeg_bytes  # stored as bytes, encoded to base64 in agent_func
+                        "data": jpeg_bytes
                     })
                     _SEQ_COUNTERS[rec_id] = seq + 1
+                    _LAST_FRAME_AT[rec_id] = time.time()
 
             stop_event.wait(interval)
     except Exception:
@@ -160,6 +176,11 @@ def start_recording(run_id: str) -> None:
     Enable recording (persistence) of frames for this run_id.
     """
     with _LOCK:
+        # Hard limit: max active recordings
+        if len(_RECORDING_FLAGS) >= MAX_ACTIVE_RECORDINGS:
+            logging.warning(f"[LIMIT] Cannot start recording {run_id}: MAX_ACTIVE_RECORDINGS ({MAX_ACTIVE_RECORDINGS}) reached")
+            return
+        
         _RECORDING_FLAGS.add(run_id)
         if run_id not in _RECORDED_FRAMES:
             _RECORDED_FRAMES[run_id] = []
@@ -167,6 +188,7 @@ def start_recording(run_id: str) -> None:
             _SEQ_COUNTERS[run_id] = 0
         if run_id not in _ACKED_UP_TO:
             _ACKED_UP_TO[run_id] = -1
+        _LAST_FRAME_AT[run_id] = time.time()
     logging.info(f"Started recording frames for run_id={run_id}")
 
 def stop_recording(run_id: str) -> None:
@@ -224,7 +246,41 @@ def clear_recorded_frames(run_id: str) -> None:
     Clear all recorded frames and reset seq counter for the given run_id.
     """
     with _LOCK:
+        _RECORDING_FLAGS.discard(run_id)
         _RECORDED_FRAMES.pop(run_id, None)
         _SEQ_COUNTERS.pop(run_id, None)
         _ACKED_UP_TO.pop(run_id, None)
-    logging.info(f"Cleared recorded frames for run_id={run_id}")
+        _LAST_FRAME_AT.pop(run_id, None)
+    logging.info(f"Cleared all state for run_id={run_id}")
+
+
+# -------------------------------------------------------------------------
+# TTL-Based Garbage Collection
+# -------------------------------------------------------------------------
+
+def _recording_gc():
+    """Background thread that cleans up stale recordings."""
+    while True:
+        now = time.time()
+        with _LOCK:
+            for run_id in list(_RECORDING_FLAGS):
+                last_activity = _LAST_FRAME_AT.get(run_id, 0)
+                if now - last_activity > RECORDING_TTL_SECONDS:
+                    _RECORDING_FLAGS.discard(run_id)
+                    _RECORDED_FRAMES.pop(run_id, None)
+                    _SEQ_COUNTERS.pop(run_id, None)
+                    _ACKED_UP_TO.pop(run_id, None)
+                    _LAST_FRAME_AT.pop(run_id, None)
+                    logging.warning(f"[GC] Cleaned up inactive recording run_id={run_id} (TTL expired)")
+        time.sleep(RECORDING_GC_INTERVAL)
+
+
+def _start_gc_once():
+    global _GC_STARTED
+    if not _GC_STARTED:
+        _GC_STARTED = True
+        threading.Thread(target=_recording_gc, daemon=True, name="recording-gc").start()
+        logging.info("Recording GC thread started")
+
+
+_start_gc_once()
