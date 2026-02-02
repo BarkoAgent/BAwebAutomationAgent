@@ -536,33 +536,28 @@ def change_frame_to_original(_run_test_id='1') -> str:
     return "frame_changed"
 
 
-def start_frame_recording(_run_test_id='1') -> str:
+def _start_frame_recording(_run_test_id='1') -> str:
     """
-    Starts persisting (recording) frames for the given run_id.
-
-    Usage:
-        start_frame_recording({})
+    [SYSTEM] Starts persisting (recording) frames for the given run_id.
+    Not exposed to users - called by backend only.
     """
     streaming.start_recording(_run_test_id)
-    log_function_definition(start_frame_recording, _run_test_id=_run_test_id)
     return "recording started"
 
 
-def stop_frame_recording(_run_test_id='1') -> str:
+def _stop_frame_recording(_run_test_id='1') -> str:
     """
-    Stops persisting (recording) frames for the given run_id.
-
-    Usage:
-        stop_frame_recording({})
+    [SYSTEM] Stops persisting (recording) frames for the given run_id.
+    Not exposed to users - called by backend only.
     """
     streaming.stop_recording(_run_test_id)
-    log_function_definition(stop_frame_recording, _run_test_id=_run_test_id)
     return "recording stopped"
 
 
-def get_recorded_frames(_run_test_id='1', since_seq: int = 0, limit: int = 50):
+def _get_recorded_frames(_run_test_id='1', since_seq: int = 0, limit: int = 50):
     """
-    Retrieves persisted frames with cursor-based pagination.
+    [SYSTEM] Retrieves persisted frames with cursor-based pagination.
+    Not exposed to users - called by backend only.
     
     Args:
         _run_test_id: Execution identifier
@@ -571,9 +566,6 @@ def get_recorded_frames(_run_test_id='1', since_seq: int = 0, limit: int = 50):
     
     Returns:
         List of dicts: [{'seq': int, 'timestamp': float, 'data': base64_str}, ...]
-
-    Usage:
-        get_recorded_frames({'since_seq': 0, 'limit': 50})
     """
     try:
         if since_seq == "":
@@ -590,7 +582,6 @@ def get_recorded_frames(_run_test_id='1', since_seq: int = 0, limit: int = 50):
         limit = 50
 
     frames = streaming.get_recorded_frames(_run_test_id, since_seq=since_seq, limit=limit)
-    print(f"DEBUG: get_recorded_frames({_run_test_id}, since_seq={since_seq}, limit={limit}) found {len(frames)} frames")
     
     result = []
     for frame in frames:
@@ -601,21 +592,18 @@ def get_recorded_frames(_run_test_id='1', since_seq: int = 0, limit: int = 50):
             'data': b64_str
         })
     
-    log_function_definition(get_recorded_frames, _run_test_id=_run_test_id, since_seq=since_seq, limit=limit)
     return result
 
 
-def ack_recorded_frames(_run_test_id='1', up_to_seq: int = 0) -> str:
+def _ack_recorded_frames(_run_test_id='1', up_to_seq: int = 0) -> str:
     """
-    Acknowledge frames up to and including up_to_seq.
+    [SYSTEM] Acknowledge frames up to and including up_to_seq.
     ACK'd frames are freed from memory and will not be returned in future calls.
+    Not exposed to users - called by backend only.
     
     Args:
         _run_test_id: Execution identifier
         up_to_seq: ACK all frames with seq <= up_to_seq
-    
-    Usage:
-        ack_recorded_frames({'up_to_seq': 10})
     """
     try:
         if up_to_seq == "":
@@ -626,18 +614,13 @@ def ack_recorded_frames(_run_test_id='1', up_to_seq: int = 0) -> str:
         up_to_seq = 0
 
     streaming.ack_recorded_frames(_run_test_id, up_to_seq=up_to_seq)
-    log_function_definition(ack_recorded_frames, _run_test_id=_run_test_id, up_to_seq=up_to_seq)
     return "frames acknowledged"
 
 
-def clear_frame_recording(_run_test_id='1') -> str:
+def _clear_frame_recording(_run_test_id='1') -> str:
     """
-    Clears all persisted frames and resets seq counter for the given run_id.
-    Use this to fully reset recording state.
-
-    Usage:
-        clear_frame_recording({})
+    [SYSTEM] Clears all persisted frames and resets seq counter for the given run_id.
+    Not exposed to users - called by backend only.
     """
     streaming.clear_recorded_frames(_run_test_id)
-    log_function_definition(clear_frame_recording, _run_test_id=_run_test_id)
     return "recording cleared"

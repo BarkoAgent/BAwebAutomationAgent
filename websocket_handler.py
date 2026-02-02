@@ -36,6 +36,15 @@ FUNCTION_MAP = {
     if not name.startswith("_")
 }
 
+# System functions: callable by backend but NOT exposed via list_available_methods
+SYSTEM_FUNCTIONS = {
+    "_start_frame_recording": agent_func._start_frame_recording,
+    "_stop_frame_recording": agent_func._stop_frame_recording,
+    "_get_recorded_frames": agent_func._get_recorded_frames,
+    "_ack_recorded_frames": agent_func._ack_recorded_frames,
+    "_clear_frame_recording": agent_func._clear_frame_recording,
+}
+
 def _make_envelope(header: dict, payload_bytes: bytes) -> bytes:
     header_json = json.dumps(header, separators=(",", ":" )).encode("utf-8")
     header_len = len(header_json)
@@ -154,7 +163,24 @@ async def handle_message(message):
                 sig = inspect.signature(func)
                 arg_names = [p.name for p in sig.parameters.values() if p.name != "_run_test_id"]
                 method_details.append({"name": name, "args": arg_names, "doc": func.__doc__ or ""})
-            response_dict.update({"status": "success", "methods": method_details})
+            
+            # System methods for capability detection (not user-callable)
+            system_methods = [
+                {"name": name, "args": [], "doc": "[SYSTEM]"} 
+                for name in SYSTEM_FUNCTIONS.keys()
+            ]
+            
+            response_dict.update({
+                "status": "success", 
+                "methods": method_details,
+                "system_methods": system_methods
+            })
+            return json.dumps(response_dict)
+
+        # Handle SYSTEM functions 
+        if function_name in SYSTEM_FUNCTIONS:
+            result = await call_maybe_blocking(SYSTEM_FUNCTIONS[function_name], *args, **kwargs)
+            response_dict.update({"status": "success", "result": result})
             return json.dumps(response_dict)
 
         if function_name in FUNCTION_MAP:
