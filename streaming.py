@@ -160,8 +160,6 @@ def get_latest_frame(run_id: str) -> Optional[bytes]:
     """
     with _LOCK:
         item = _LATEST_FRAMES.get(run_id)
-        # _LATEST_FRAMES.pop(run_id, None) # Don't pop if you want to reuse it?
-        # Original code popped it. Sticking to original behavior for streaming.
         if item is None:
             return None
         return item[0]
