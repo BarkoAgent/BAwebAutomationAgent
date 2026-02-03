@@ -4,8 +4,7 @@ import textwrap
 import os
 import random
 import string
-import base64
-import streaming
+import ba_ws_sdk.streaming as streaming
 from testui.support.testui_driver import TestUIDriver
 
 test_variables = {}
