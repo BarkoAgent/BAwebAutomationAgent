@@ -1,4 +1,5 @@
 # streaming.py
+import base64
 import threading
 import time
 import logging
@@ -282,3 +283,92 @@ def _start_gc_once():
 
 
 _start_gc_once()
+
+def _start_frame_recording(_run_test_id='1') -> str:
+    """
+    [SYSTEM] Starts persisting (recording) frames for the given run_id.
+    Not exposed to users - called by backend only.
+    """
+    start_recording(_run_test_id)
+    return "recording started"
+
+
+def _stop_frame_recording(_run_test_id='1') -> str:
+    """
+    [SYSTEM] Stops persisting (recording) frames for the given run_id.
+    Not exposed to users - called by backend only.
+    """
+    stop_recording(_run_test_id)
+    return "recording stopped"
+
+
+def _get_recorded_frames(_run_test_id='1', since_seq: int = 0, limit: int = 50):
+    """
+    [SYSTEM] Retrieves persisted frames with cursor-based pagination.
+    Not exposed to users - called by backend only.
+    
+    Args:
+        _run_test_id: Execution identifier
+        since_seq: Return only frames with seq >= since_seq (default: 0)
+        limit: Max frames to return (default: 50)
+    
+    Returns:
+        List of dicts: [{'seq': int, 'timestamp': float, 'data': base64_str}, ...]
+    """
+    try:
+        if since_seq == "":
+            since_seq = 0
+        else:
+            since_seq = int(since_seq)
+            
+        if limit == "":
+            limit = 50
+        else:
+            limit = int(limit)
+    except (ValueError, TypeError):
+        since_seq = 0
+        limit = 50
+
+    frames = get_recorded_frames(_run_test_id, since_seq=since_seq, limit=limit)
+    
+    result = []
+    for frame in frames:
+        b64_str = base64.b64encode(frame["data"]).decode('utf-8')
+        result.append({
+            'seq': frame["seq"],
+            'timestamp': frame["timestamp"],
+            'data': b64_str
+        })
+    
+    return result
+
+
+def _ack_recorded_frames(_run_test_id='1', up_to_seq: int = 0) -> str:
+    """
+    [SYSTEM] Acknowledge frames up to and including up_to_seq.
+    ACK'd frames are freed from memory and will not be returned in future calls.
+    Not exposed to users - called by backend only.
+    
+    Args:
+        _run_test_id: Execution identifier
+        up_to_seq: ACK all frames with seq <= up_to_seq
+    """
+    try:
+        if up_to_seq == "":
+            up_to_seq = 0
+        else:
+            up_to_seq = int(up_to_seq)
+    except (ValueError, TypeError):
+        up_to_seq = 0
+
+    ack_recorded_frames(_run_test_id, up_to_seq=up_to_seq)
+    return "frames acknowledged"
+
+
+def _clear_frame_recording(_run_test_id='1') -> str:
+    """
+    [SYSTEM] Clears all persisted frames and resets seq counter for the given run_id.
+    Not exposed to users - called by backend only.
+    """
+    clear_recorded_frames(_run_test_id)
+    return "recording cleared"

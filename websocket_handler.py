@@ -8,6 +8,7 @@ import os
 import agent_func
 import struct
 import hashlib
+import streaming
 
 from typing import Optional, Callable
 from dotenv import load_dotenv
@@ -37,12 +38,14 @@ FUNCTION_MAP = {
 }
 
 # System functions: callable by backend but NOT exposed via list_available_methods
+
+
 SYSTEM_FUNCTIONS = {
-    "_start_frame_recording": agent_func._start_frame_recording,
-    "_stop_frame_recording": agent_func._stop_frame_recording,
-    "_get_recorded_frames": agent_func._get_recorded_frames,
-    "_ack_recorded_frames": agent_func._ack_recorded_frames,
-    "_clear_frame_recording": agent_func._clear_frame_recording,
+    "_start_frame_recording": streaming._start_frame_recording,
+    "_stop_frame_recording": streaming._stop_frame_recording,
+    "_get_recorded_frames": streaming._get_recorded_frames,
+    "_ack_recorded_frames": streaming._ack_recorded_frames,
+    "_clear_frame_recording": streaming._clear_frame_recording,
 }
 
 def _make_envelope(header: dict, payload_bytes: bytes) -> bytes:
@@ -181,6 +184,7 @@ async def handle_message(message):
         if function_name in SYSTEM_FUNCTIONS:
             result = await call_maybe_blocking(SYSTEM_FUNCTIONS[function_name], *args, **kwargs)
             response_dict.update({"status": "success", "result": result})
+            logging.info(f"Executed SYSTEM function: {function_name}")
             return json.dumps(response_dict)
 
         if function_name in FUNCTION_MAP:
