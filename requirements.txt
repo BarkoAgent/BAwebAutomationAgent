@@ -4,3 +4,4 @@ requests
 python-testui==1.2.5
 aiohttp
 python-dotenv
+certifi

@@ -5,6 +5,10 @@ import os
 import sys
 from dotenv import load_dotenv
 from websocket_handler import main_connect_ws
+import certifi
+
+os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+os.environ.setdefault('REQUESTS_CA_BUNDLE', certifi.where())
 
 load_dotenv()
 
