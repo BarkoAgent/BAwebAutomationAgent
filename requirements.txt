@@ -5,3 +5,4 @@ python-testui==1.2.5
 aiohttp
 python-dotenv
 certifi
+git+https://github.com/BarkoAgent/ba-sdk.git

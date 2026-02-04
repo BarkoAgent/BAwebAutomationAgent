@@ -4,7 +4,7 @@ import textwrap
 import os
 import random
 import string
-import streaming
+import ba_ws_sdk.streaming as streaming
 from testui.support.testui_driver import TestUIDriver
 
 test_variables = {}
@@ -126,7 +126,7 @@ def create_driver(_run_test_id='1'):
         options.add_argument("--headless")
     streaming.stop_stream("1")
     driver[_run_test_id] = driver[_run_test_id].set_selenium_driver(chrome_options=options)
-    streaming.start_stream(driver[_run_test_id], run_id="1", fps=1.0, jpeg_quality=70)
+    streaming.start_stream(driver[_run_test_id], run_id="1", fps=5.0, jpeg_quality=70)
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "driver created"
