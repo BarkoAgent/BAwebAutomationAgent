@@ -4,11 +4,12 @@ import logging
 import os
 import sys
 from dotenv import load_dotenv
-from websocket_handler import main_connect_ws
 import certifi
 
 os.environ.setdefault('SSL_CERT_FILE', certifi.where())
 os.environ.setdefault('REQUESTS_CA_BUNDLE', certifi.where())
+import agent_func
+from ba_ws_sdk import main_connect_ws
 
 load_dotenv()
 
@@ -43,7 +44,7 @@ async def main():
         logging.info("Streaming is disabled.")
 
     try:
-        await main_connect_ws()
+        await main_connect_ws(agent_func)
     except Exception as e:
         logging.exception(f"Agent encountered an error: {e}")
 
