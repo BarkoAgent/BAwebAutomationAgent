@@ -127,6 +127,7 @@ def create_driver(_run_test_id='1'):
     streaming.stop_stream("1")
     driver[_run_test_id] = driver[_run_test_id].set_selenium_driver(chrome_options=options)
     streaming.start_stream(driver[_run_test_id], run_id="1", fps=5.0, jpeg_quality=70)
+    streaming.register_driver("1", driver[_run_test_id])
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "driver created"
@@ -222,6 +223,7 @@ def stop_driver(_run_test_id='1'):
     global driver
     if _run_test_id in driver:
         try:
+            streaming.unregister_driver("1")
             streaming.stop_stream("1")
         except Exception:
             print("Failed to stop stream cleanly")
