@@ -52,4 +52,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        agent_func.stop_all_drivers()
         logging.info("Client stopped manually.")
