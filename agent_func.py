@@ -268,7 +268,10 @@ def stop_driver(_run_test_id='1'):
             streaming.stop_stream(_run_test_id)
         except Exception:
             print("Failed to stop stream cleanly")
-        file_system.clear_downloads(_run_test_id)
+        try:
+            file_system.clear_downloads(_run_test_id)
+        except Exception:
+            pass
         driver[_run_test_id].quit()
         log_function_definition(stop_driver, _run_test_id=_run_test_id)
         return "success"
@@ -625,7 +628,7 @@ def wait_for_download(timeout='30', _run_test_id='1') -> str:
         # 1. Detect brand-new files (not in snapshot)
         new_names = set(current_files.keys()) - set(existing_snapshot.keys())
         if new_names:
-            new_file = sorted(new_names)[0]
+            new_file = max(new_names, key=lambda n: current_files[n])
             break
 
         # 2. Detect files whose mtime changed since the snapshot
