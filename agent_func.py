@@ -2,14 +2,30 @@ import inspect
 import re
 import textwrap
 import os
+import json
+import time
 import random
 import string
+import logging
 import ba_ws_sdk.streaming as streaming
+import ba_ws_sdk.file_system as file_system
 from testui.support.testui_driver import TestUIDriver
 
 test_variables = {}
 driver: dict[str, TestUIDriver] = {}
 run_test_id = ""
+
+# Files to ignore when scanning the attachments directory
+_IGNORED_FILES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
+
+
+def _is_valid_download(name: str) -> bool:
+    """Return True if *name* looks like a real user file, not a system/temp artifact."""
+    if name in _IGNORED_FILES or name.startswith('.'):
+        return False
+    if name.endswith('.crdownload') or name.endswith('.tmp') or name.endswith('.part'):
+        return False
+    return True
 
 
 def clean_html(html_content):
@@ -22,6 +38,10 @@ def stop_all_drivers():
     for run_id, drv in list(driver.items()):
         try:
             streaming.stop_stream(run_id)
+        except Exception:
+            pass
+        try:
+            file_system.clear_downloads(run_id)
         except Exception:
             pass
         try:
@@ -118,6 +138,16 @@ def create_driver(_run_test_id='1'):
     options.add_argument("disable-features=PasswordCheck,PasswordLeakDetection,SafetyCheck")
     options.add_argument("--window-size=1280,800")
     options.page_load_strategy = 'eager'
+    download_dir = str(file_system.get_attachments_dir())
+    os.makedirs(download_dir, exist_ok=True)
+    prefs = {
+        "download.default_directory": download_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "safebrowsing.enabled": False,
+        "plugins.always_open_pdf_externally": True,
+    }
+    options.add_experimental_option("prefs", prefs)
     driver[_run_test_id] = (
         NewDriver()
         .set_logger()
@@ -130,6 +160,15 @@ def create_driver(_run_test_id='1'):
         options.add_argument("--headless")
     streaming.stop_stream(_run_test_id)
     driver[_run_test_id] = driver[_run_test_id].set_selenium_driver(chrome_options=options)
+    # CDP command to enable downloads — required for headless Chrome
+    # where Chrome prefs alone are ignored for download behavior
+    try:
+        driver[_run_test_id].get_driver().execute_cdp_cmd(
+            "Page.setDownloadBehavior",
+            {"behavior": "allow", "downloadPath": download_dir},
+        )
+    except Exception as e:
+        logging.warning(f"[Download] CDP setDownloadBehavior failed: {e}")
     streaming.start_stream(driver[_run_test_id], run_id=_run_test_id, fps=5.0, jpeg_quality=70)
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
@@ -229,6 +268,10 @@ def stop_driver(_run_test_id='1'):
             streaming.stop_stream(_run_test_id)
         except Exception:
             print("Failed to stop stream cleanly")
+        try:
+            file_system.clear_downloads(_run_test_id)
+        except Exception:
+            pass
         driver[_run_test_id].quit()
         log_function_definition(stop_driver, _run_test_id=_run_test_id)
         return "success"
@@ -510,3 +553,199 @@ def change_frame_to_original(_run_test_id='1') -> str:
     driver[_run_test_id].get_driver().switch_to.default_content()
     log_function_definition(change_frame_to_original, _run_test_id=_run_test_id)
     return "frame_changed"
+
+
+# ─── File Download (browser-specific) ────────────────────────────────────────
+
+def wait_for_download(timeout='30', _run_test_id='1') -> str:
+    """
+    Waits for a browser file download to complete. Call this AFTER clicking
+    a download button or link. Returns the downloaded file name and size.
+
+    Selenium does not have native download events, so this polls the
+    attachments directory for new or recently modified files and
+    .crdownload in-progress markers.
+
+    Handles duplicates: if Chrome creates a file with a ' (N)' suffix,
+    it is renamed to overwrite the original, keeping a single clean copy.
+
+    Args:
+        timeout: Maximum seconds to wait for the download to complete (default 30).
+
+    Usage:
+        wait_for_download({})
+        wait_for_download({'timeout': '60'})
+    """
+    try:
+        timeout_secs = float(timeout)
+    except (TypeError, ValueError):
+        timeout_secs = 30.0
+
+    attachments_dir = file_system.get_attachments_dir()
+    os.makedirs(str(attachments_dir), exist_ok=True)
+
+    call_time = time.time()
+
+    # Snapshot existing files with their mtimes
+    existing_snapshot = {}
+    if attachments_dir.is_dir():
+        for f in attachments_dir.iterdir():
+            if f.is_file() and _is_valid_download(f.name):
+                try:
+                    existing_snapshot[f.name] = f.stat().st_mtime
+                except OSError:
+                    pass
+
+    deadline = call_time + timeout_secs
+    new_file = None
+
+    while time.time() < deadline:
+        time.sleep(0.5)
+
+        if not attachments_dir.is_dir():
+            continue
+
+        # Scan directory
+        in_progress = []
+        current_files = {}
+        for f in attachments_dir.iterdir():
+            if not f.is_file():
+                continue
+            if f.name.endswith('.crdownload'):
+                in_progress.append(f.name)
+                continue
+            if not _is_valid_download(f.name):
+                continue
+            try:
+                current_files[f.name] = f.stat().st_mtime
+            except OSError:
+                pass
+
+        if in_progress:
+            # A download is actively in progress — keep waiting
+            continue
+
+        # 1. Detect brand-new files (not in snapshot)
+        new_names = set(current_files.keys()) - set(existing_snapshot.keys())
+        if new_names:
+            new_file = max(new_names, key=lambda n: current_files[n])
+            break
+
+        # 2. Detect files whose mtime changed since the snapshot
+        #    (covers overwrite of same file, same size)
+        for name, mtime in current_files.items():
+            old_mtime = existing_snapshot.get(name)
+            if old_mtime is not None and mtime > old_mtime:
+                new_file = name
+                break
+
+        if new_file:
+            break
+
+    # Wait for file size to stabilize (fully written)
+    if new_file:
+        stable_size = -1
+        for _ in range(6):  # up to 3 seconds
+            try:
+                current_size = (attachments_dir / new_file).stat().st_size
+            except OSError:
+                break
+            if current_size == stable_size and current_size > 0:
+                break
+            stable_size = current_size
+            time.sleep(0.5)
+
+    if new_file is None:
+        # Clean up any leftover .crdownload partial files
+        if attachments_dir.is_dir():
+            for f in attachments_dir.iterdir():
+                if f.is_file() and f.name.endswith('.crdownload'):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        return json.dumps({
+            "status": "error",
+            "error": f"No download detected after {timeout_secs}s. Make sure you clicked a download link or button before calling wait_for_download.",
+        })
+
+    file_path = str((attachments_dir / new_file).resolve())
+    try:
+        safe_name = file_system.sanitize_filename(new_file)
+    except ValueError:
+        safe_name = new_file
+
+    file_system.on_download_started(_run_test_id, safe_name)
+    size_bytes = os.path.getsize(file_path)
+    file_system.on_download_complete(_run_test_id, safe_name, file_path)
+
+    log_function_definition(wait_for_download, timeout=timeout, _run_test_id=_run_test_id)
+    return json.dumps({
+        "status": "success",
+        "file_name": safe_name,
+        "size_bytes": size_bytes,
+    })
+
+
+# ─── File Upload to Web Form (browser-specific) ─────────────────────────────
+
+def upload_file_to_form(locator_type, locator, file_name, wait_for='', timeout=15000, _run_test_id='1') -> str:
+    """
+    Uploads an agent file to a web form's file input element using Selenium's send_keys().
+    The locator must point to an <input type="file"> element.
+
+    Args:
+        locator_type: locator strategy (css, xpath, id)
+        locator: the locator path for the file input element (must be input[type=file])
+        file_name: name of the file in the agent's attachments directory
+        wait_for: optional locator to wait for after upload (e.g. a success message).
+                  Format: 'locator_type:locator' like 'css:.upload-success'
+        timeout: max milliseconds to wait for upload completion (default 15000 = 15s)
+
+    Usage:
+        upload_file_to_form({'locator_type': 'css', 'locator': 'input[type=file]', 'file_name': 'my_file.txt'})
+        upload_file_to_form({'locator_type': 'css', 'locator': '#file-input', 'file_name': 'report.pdf', 'wait_for': 'css:.upload-done'})
+    """
+    try:
+        timeout = int(timeout)
+    except (TypeError, ValueError):
+        timeout = 15000
+
+    try:
+        safe_name = file_system.sanitize_filename(file_name)
+    except ValueError as e:
+        return f"error: {e}"
+
+    attachments_dir = file_system.get_attachments_dir()
+    file_path = (attachments_dir / safe_name).resolve()
+    if not file_path.is_file():
+        avail = [f.name for f in attachments_dir.resolve().iterdir() if f.is_file() and _is_valid_download(f.name)] if attachments_dir.exists() else []
+        return f"error: file '{safe_name}' not found at {file_path}. Available files: {avail}"
+
+    global driver
+    abs_path = str(file_path)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    element.send_keys(abs_path)
+
+    wait_detail = ""
+    try:
+        if wait_for:
+            # Parse 'locator_type:locator' format
+            parts = wait_for.split(':', 1)
+            if len(parts) == 2:
+                wf_type, wf_locator = parts
+                driver[_run_test_id].e(
+                    locator_type=wf_type, locator=wf_locator
+                ).wait_until_exists(seconds=timeout // 1000)
+                wait_detail = f", waited for '{wait_for}' to appear"
+            else:
+                wait_detail = f", warning: invalid wait_for format '{wait_for}' (expected 'locator_type:locator')"
+        else:
+            # Brief pause for the upload to process
+            time.sleep(2)
+            wait_detail = ", waited 2s for upload to process"
+    except Exception as e:
+        wait_detail = f", warning: wait timed out ({e}) - upload may still be in progress"
+
+    log_function_definition(upload_file_to_form, locator_type, locator, file_name, _run_test_id=_run_test_id)
+    return f"uploaded {safe_name} ({abs_path}) to {locator_type}={locator}{wait_detail}"
