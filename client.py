@@ -62,6 +62,8 @@ def _sigint_handler(signum, frame):
     raise KeyboardInterrupt()
 
 if __name__ == "__main__":
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     signal.signal(signal.SIGINT, _sigint_handler)
     try:
         asyncio.run(main())
@@ -73,3 +75,4 @@ if __name__ == "__main__":
         except Exception:
             pass
         logging.info("Client stopped manually.")
+        os._exit(0)

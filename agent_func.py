@@ -34,6 +34,7 @@ def clean_html(html_content):
     return html_content
 
 def stop_all_drivers():
+    import threading
     global driver
     for run_id, drv in list(driver.items()):
         try:
@@ -45,8 +46,13 @@ def stop_all_drivers():
         except Exception:
             pass
         try:
-            drv.quit()
-            print(f"✅ Driver '{run_id}' stopped.")
+            t = threading.Thread(target=drv.quit, daemon=True)
+            t.start()
+            t.join(timeout=3)
+            if t.is_alive():
+                print(f"⚠️ Driver '{run_id}' quit timed out, skipping.")
+            else:
+                print(f"✅ Driver '{run_id}' stopped.")
         except Exception as e:
             print(f"⚠️ Error stopping driver '{run_id}': {e}")
     driver.clear()
