@@ -749,3 +749,35 @@ def upload_file_to_form(locator_type, locator, file_name, wait_for='', timeout=1
 
     log_function_definition(upload_file_to_form, locator_type, locator, file_name, _run_test_id=_run_test_id)
     return f"uploaded {safe_name} ({abs_path}) to {locator_type}={locator}{wait_detail}"
+
+
+def select_by_visible_text(locator_type: str, locator: str, text: str, _run_test_id='1') -> str:
+    """
+    Selects a value in a <select> element by visible text.
+
+    The element is defined by its locator_type (id, css, xpath)
+    and its locator path associated.
+
+    Usage:
+        select_by_visible_text({'locator_type': 'css', 'locator': '#country', 'text': 'Latvia'})
+        select_by_visible_text({'locator_type': 'xpath', 'locator': '//select[@name=\"role\"]', 'text': 'Admin'})
+    """
+    global driver
+    from selenium.webdriver.common.action_chains import ActionChains
+    from selenium.webdriver.support.ui import Select
+    from selenium.common.exceptions import StaleElementReferenceException
+
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    actions = ActionChains(driver[_run_test_id].get_driver())
+    actions.move_to_element(element).perform()
+
+    try:
+        Select(element).select_by_visible_text(text)
+    except StaleElementReferenceException:
+        element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+        Select(element).select_by_visible_text(text)
+
+    log_function_definition(select_by_visible_text, locator_type, locator, text, _run_test_id=_run_test_id)
+    return f"selected value '{text}' successfully"
