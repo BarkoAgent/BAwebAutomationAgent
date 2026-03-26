@@ -2,6 +2,7 @@ import inspect
 import re
 import textwrap
 import os
+import sys
 import json
 import time
 import random
@@ -45,12 +46,29 @@ def stop_all_drivers():
             file_system.clear_downloads(run_id)
         except Exception:
             pass
+        chromedriver_proc = None
+        try:
+            raw = drv.get_driver()
+            if hasattr(raw, 'service') and hasattr(raw.service, 'process'):
+                chromedriver_proc = raw.service.process
+        except Exception:
+            pass
         try:
             t = threading.Thread(target=drv.quit, daemon=True)
             t.start()
             t.join(timeout=3)
             if t.is_alive():
-                print(f"⚠️ Driver '{run_id}' quit timed out, skipping.")
+                print(f"⚠️ Driver '{run_id}' quit timed out, force-killing.")
+                if sys.platform == 'win32' and chromedriver_proc is not None:
+                    try:
+                        import subprocess
+                        subprocess.run(
+                            ['taskkill', '/F', '/T', '/PID', str(chromedriver_proc.pid)],
+                            capture_output=True
+                        )
+                        print(f"🔪 Force-killed chromedriver tree for '{run_id}'.")
+                    except Exception as ke:
+                        print(f"⚠️ Force-kill failed for '{run_id}': {ke}")
             else:
                 print(f"✅ Driver '{run_id}' stopped.")
         except Exception as e:
