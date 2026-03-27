@@ -26,7 +26,8 @@ The final answer (or test automation plan) should always be in English, and shou
    - Always confirm that your locator is genuinely unique and likely to remain stable (e.g., avoid dynamic IDs).
 
 4. **Actions & Interactions**
-   - **click**: Clicks the specified element.
+   - **click**: Clicks the specified element by simulating a real mouse click (scroll into view + mouse event). Use this as the default for buttons, links, and checkboxes.
+   - **js_click**: Clicks the element via a direct JavaScript DOM call instead of mouse simulation. Use this when `click` appears to succeed but nothing happens — common with React, Vue, or Angular rendered buttons whose event handlers require a native DOM click event. Also use when the element is present in the DOM but partially obscured by an overlay that intercepts mouse events.
    - **double_click**: Double clicks the specified element.
    - **right_click**: Right clicks the specified element.
    - **hover**: Moves the mouse over an element without clicking. Use this to reveal dropdown menus or tooltips before interacting with their contents.

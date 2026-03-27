@@ -414,20 +414,49 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
 
 def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    Clicks in the element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated.
+    Clicks the element identified by `locator_type` (id, css, xpath) and `locator`.
 
-    It will return a string saying clicked successfully on the element
+    Scrolls the element into view first, then performs a standard Selenium mouse click.
+    This simulates a real user click including mouse movement, which is suitable for most
+    interactive elements. If the element does not respond (e.g. React/Vue/Angular buttons
+    with synthetic event handlers), use js_click instead.
     """
     global driver
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(1)
     from selenium.webdriver.common.action_chains import ActionChains
+    selenium_driver = driver[_run_test_id].get_driver()
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    actions = ActionChains(driver[_run_test_id])
-    actions.move_to_element(element).perform()
+    ActionChains(selenium_driver).move_to_element(element).perform()
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
     log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
     return "clicked successfully on the element"
+
+
+def js_click(locator_type: str, locator: str, _run_test_id='1') -> str:
+    """
+    Clicks the element using a direct JavaScript DOM click, bypassing Selenium's mouse
+    event simulation.
+
+    Use this instead of click when:
+    - The element is rendered by a JS framework (React, Vue, Angular) and does not respond
+      to a standard Selenium click.
+    - The element is partially covered by an overlay or sticky header that intercepts mouse
+      events, but the element itself is present in the DOM.
+    - click appears to succeed (no error) but the expected UI change does not happen.
+
+    Note: js_click does NOT fire mousedown/mouseup/mouseover events — only the click event.
+    If the app requires hover state or mousedown handlers to work (e.g. custom drag targets,
+    canvas elements), use click instead.
+    """
+    global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(1)
+    from selenium.webdriver.common.action_chains import ActionChains
+    selenium_driver = driver[_run_test_id].get_driver()
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    ActionChains(selenium_driver).move_to_element(element).perform()
+    selenium_driver.execute_script("arguments[0].click();", element)
+    log_function_definition(js_click, locator_type, locator, _run_test_id=_run_test_id)
+    return "clicked successfully on the element using JavaScript"
 
 
 def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
