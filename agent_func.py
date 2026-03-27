@@ -11,6 +11,8 @@ import ba_ws_sdk.streaming as streaming
 import ba_ws_sdk.file_system as file_system
 from testui.support.testui_driver import TestUIDriver
 
+DEFAULT_TIMEOUT = int(os.getenv("DEFAULT_TIMEOUT", "10"))
+
 test_variables = {}
 driver: dict[str, TestUIDriver] = {}
 run_test_id = ""
@@ -360,7 +362,7 @@ def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
         exists({'locator_type': 'css', 'locator': '.nav'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
@@ -378,7 +380,7 @@ def exists_with_text(text: str, _run_test_id='1', use_vars: str = 'false') -> st
     if use_vars == 'true' and _run_test_id in test_variables:
         text = test_variables[_run_test_id].get(text, text)
     locator = f"//*[contains(text(), '{text}')]"
-    driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(exists_with_text, text, _run_test_id=_run_test_id)
     return "exists (text)"
 
@@ -391,7 +393,7 @@ def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
         does_not_exist({'locator_type': 'xpath', 'locator': '//div[@id=\"loading\"]'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(does_not_exist, locator_type, locator, _run_test_id=_run_test_id)
     return "doesn't exists"
 
@@ -404,7 +406,7 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
         scroll_to_element({'locator_type': 'css', 'locator': '#footer'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     current_driver_instance = driver[_run_test_id].get_driver()
     current_driver_instance.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
@@ -422,7 +424,7 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     with synthetic event handlers), use js_click instead.
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(DEFAULT_TIMEOUT)
     from selenium.webdriver.common.action_chains import ActionChains
     selenium_driver = driver[_run_test_id].get_driver()
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
@@ -449,7 +451,7 @@ def js_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     canvas elements), use click instead.
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(DEFAULT_TIMEOUT)
     from selenium.webdriver.common.action_chains import ActionChains
     selenium_driver = driver[_run_test_id].get_driver()
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
@@ -468,7 +470,7 @@ def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
     actions.double_click(element).perform()
@@ -485,7 +487,7 @@ def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
     actions.context_click(element).perform()
@@ -796,7 +798,7 @@ def select_by_visible_text(locator_type: str, locator: str, text: str, _run_test
     from selenium.webdriver.support.ui import Select
     from selenium.common.exceptions import StaleElementReferenceException
 
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
 
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
@@ -824,7 +826,7 @@ def select_by_value(locator_type: str, locator: str, value: str, _run_test_id='1
     from selenium.webdriver.support.ui import Select
     from selenium.common.exceptions import StaleElementReferenceException
 
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     try:
         Select(element).select_by_value(value)
@@ -844,7 +846,7 @@ def get_element_text(locator_type: str, locator: str, _run_test_id='1') -> str:
         get_element_text({'locator_type': 'xpath', 'locator': '//h1'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     text = element.text
     log_function_definition(get_element_text, locator_type, locator, _run_test_id=_run_test_id)
@@ -861,7 +863,7 @@ def get_attribute(locator_type: str, locator: str, attribute: str, _run_test_id=
         get_attribute({'locator_type': 'css', 'locator': '#btn', 'attribute': 'disabled'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     value = element.get_attribute(attribute)
     log_function_definition(get_attribute, locator_type, locator, attribute, _run_test_id=_run_test_id)
@@ -892,7 +894,7 @@ def press_key(locator_type: str, locator: str, key: str, _run_test_id='1') -> st
         'PAGE_UP': Keys.PAGE_UP, 'PAGE_DOWN': Keys.PAGE_DOWN,
     }
     resolved_key = key_map.get(key.upper(), key)
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     element.send_keys(resolved_key)
     log_function_definition(press_key, locator_type, locator, key, _run_test_id=_run_test_id)
@@ -919,7 +921,7 @@ def handle_alert(action: str = 'accept', text: str = '', _run_test_id='1') -> st
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
     selenium_driver = driver[_run_test_id].get_driver()
-    alert = WebDriverWait(selenium_driver, 10).until(EC.alert_is_present())
+    alert = WebDriverWait(selenium_driver, DEFAULT_TIMEOUT).until(EC.alert_is_present())
     if action == 'get_text':
         result = alert.text
         log_function_definition(handle_alert, action, text, _run_test_id=_run_test_id)
@@ -950,7 +952,7 @@ def hover(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     ActionChains(driver[_run_test_id].get_driver()).move_to_element(element).perform()
     log_function_definition(hover, locator_type, locator, _run_test_id=_run_test_id)
