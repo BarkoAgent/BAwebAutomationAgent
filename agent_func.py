@@ -104,6 +104,11 @@ def log_function_definition(fn, *args, **kwargs):
             repl = f'{param}={repr(actual_val)}'
             new_line = re.sub(pattern, repl, new_line)
 
+        # Second pass: replace remaining bare variable references (needed for assertion logic
+        # where values appear outside of keyword-arg calls, e.g. `if actual != expected_text:`)
+        for param, actual_val in param_values.items():
+            new_line = re.sub(rf'\b{re.escape(param)}\b', repr(actual_val), new_line)
+
         if "selenium_url" in new_line and kwargs.get('selenium_url') is not None:
             new_line = new_line.replace("selenium_url", repr(kwargs['selenium_url']))
 
@@ -396,6 +401,40 @@ def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(does_not_exist, locator_type, locator, _run_test_id=_run_test_id)
     return "doesn't exists"
+
+
+def assert_text_equals(locator_type: str, locator: str, expected_text: str, _run_test_id='1') -> str:
+    """
+    Asserts that the visible text of an element exactly equals expected_text.
+    Raises AssertionError with a clear message if the text does not match.
+
+    Usage:
+        assert_text_equals({'locator_type': 'css', 'locator': 'h1', 'expected_text': 'Welcome'})
+    """
+    global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    actual_text = element.text
+    if actual_text != expected_text:
+        raise AssertionError(f"assert_text_equals failed: expected '{expected_text}', got '{actual_text}'")
+    log_function_definition(assert_text_equals, locator_type, locator, expected_text, _run_test_id=_run_test_id)
+    return f"text equals '{expected_text}'"
+
+
+def assert_url_contains(expected_url: str, _run_test_id='1') -> str:
+    """
+    Asserts that the current browser URL contains expected_url as a substring.
+    Raises AssertionError with a clear message if the URL does not match.
+
+    Usage:
+        assert_url_contains({'expected_url': '/dashboard'})
+    """
+    global driver
+    current_url = driver[_run_test_id].get_driver().current_url
+    if expected_url not in current_url:
+        raise AssertionError(f"assert_url_contains failed: expected URL to contain '{expected_url}', got '{current_url}'")
+    log_function_definition(assert_url_contains, expected_url, _run_test_id=_run_test_id)
+    return f"url contains '{expected_url}'"
 
 
 def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
