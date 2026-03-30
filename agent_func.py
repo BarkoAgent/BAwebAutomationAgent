@@ -11,6 +11,8 @@ import ba_ws_sdk.streaming as streaming
 import ba_ws_sdk.file_system as file_system
 from testui.support.testui_driver import TestUIDriver
 
+DEFAULT_TIMEOUT = int(os.getenv("DEFAULT_TIMEOUT", "10"))
+
 test_variables = {}
 driver: dict[str, TestUIDriver] = {}
 run_test_id = ""
@@ -101,6 +103,11 @@ def log_function_definition(fn, *args, **kwargs):
             pattern = rf"\b{param}={param}\b"
             repl = f'{param}={repr(actual_val)}'
             new_line = re.sub(pattern, repl, new_line)
+
+        # Second pass: replace remaining bare variable references (needed for assertion logic
+        # where values appear outside of keyword-arg calls, e.g. `if actual != expected_text:`)
+        for param, actual_val in param_values.items():
+            new_line = re.sub(rf'\b{re.escape(param)}\b', repr(actual_val), new_line)
 
         if "selenium_url" in new_line and kwargs.get('selenium_url') is not None:
             new_line = new_line.replace("selenium_url", repr(kwargs['selenium_url']))
@@ -360,7 +367,7 @@ def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
         exists({'locator_type': 'css', 'locator': '.nav'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
@@ -378,7 +385,7 @@ def exists_with_text(text: str, _run_test_id='1', use_vars: str = 'false') -> st
     if use_vars == 'true' and _run_test_id in test_variables:
         text = test_variables[_run_test_id].get(text, text)
     locator = f"//*[contains(text(), '{text}')]"
-    driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(exists_with_text, text, _run_test_id=_run_test_id)
     return "exists (text)"
 
@@ -391,9 +398,43 @@ def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
         does_not_exist({'locator_type': 'xpath', 'locator': '//div[@id=\"loading\"]'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(does_not_exist, locator_type, locator, _run_test_id=_run_test_id)
     return "doesn't exists"
+
+
+def assert_text_equals(locator_type: str, locator: str, expected_text: str, _run_test_id='1') -> str:
+    """
+    Asserts that the visible text of an element exactly equals expected_text.
+    Raises AssertionError with a clear message if the text does not match.
+
+    Usage:
+        assert_text_equals({'locator_type': 'css', 'locator': 'h1', 'expected_text': 'Welcome'})
+    """
+    global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    actual_text = element.text
+    if actual_text != expected_text:
+        raise AssertionError(f"assert_text_equals failed: expected '{expected_text}', got '{actual_text}'")
+    log_function_definition(assert_text_equals, locator_type, locator, expected_text, _run_test_id=_run_test_id)
+    return f"text equals '{expected_text}'"
+
+
+def assert_url_contains(expected_url: str, _run_test_id='1') -> str:
+    """
+    Asserts that the current browser URL contains expected_url as a substring.
+    Raises AssertionError with a clear message if the URL does not match.
+
+    Usage:
+        assert_url_contains({'expected_url': '/dashboard'})
+    """
+    global driver
+    current_url = driver[_run_test_id].get_driver().current_url
+    if expected_url not in current_url:
+        raise AssertionError(f"assert_url_contains failed: expected URL to contain '{expected_url}', got '{current_url}'")
+    log_function_definition(assert_url_contains, expected_url, _run_test_id=_run_test_id)
+    return f"url contains '{expected_url}'"
 
 
 def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
@@ -404,7 +445,7 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
         scroll_to_element({'locator_type': 'css', 'locator': '#footer'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     current_driver_instance = driver[_run_test_id].get_driver()
     current_driver_instance.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
@@ -414,20 +455,49 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
 
 def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
-    Clicks in the element defined by its `locator_type` (id, css, xpath)
-    and its locator path associated.
+    Clicks the element identified by `locator_type` (id, css, xpath) and `locator`.
 
-    It will return a string saying clicked successfully on the element
+    Scrolls the element into view first, then performs a standard Selenium mouse click.
+    This simulates a real user click including mouse movement, which is suitable for most
+    interactive elements. If the element does not respond (e.g. React/Vue/Angular buttons
+    with synthetic event handlers), use js_click instead.
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(DEFAULT_TIMEOUT)
     from selenium.webdriver.common.action_chains import ActionChains
+    selenium_driver = driver[_run_test_id].get_driver()
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    actions = ActionChains(driver[_run_test_id])
-    actions.move_to_element(element).perform()
+    ActionChains(selenium_driver).move_to_element(element).perform()
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
-    log_function_definition(click, locator_type, locator)
+    log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
     return "clicked successfully on the element"
+
+
+def js_click(locator_type: str, locator: str, _run_test_id='1') -> str:
+    """
+    Clicks the element using a direct JavaScript DOM click, bypassing Selenium's mouse
+    event simulation.
+
+    Use this instead of click when:
+    - The element is rendered by a JS framework (React, Vue, Angular) and does not respond
+      to a standard Selenium click.
+    - The element is partially covered by an overlay or sticky header that intercepts mouse
+      events, but the element itself is present in the DOM.
+    - click appears to succeed (no error) but the expected UI change does not happen.
+
+    Note: js_click does NOT fire mousedown/mouseup/mouseover events — only the click event.
+    If the app requires hover state or mousedown handlers to work (e.g. custom drag targets,
+    canvas elements), use click instead.
+    """
+    global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(DEFAULT_TIMEOUT)
+    from selenium.webdriver.common.action_chains import ActionChains
+    selenium_driver = driver[_run_test_id].get_driver()
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    ActionChains(selenium_driver).move_to_element(element).perform()
+    selenium_driver.execute_script("arguments[0].click();", element)
+    log_function_definition(js_click, locator_type, locator, _run_test_id=_run_test_id)
+    return "clicked successfully on the element using JavaScript"
 
 
 def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
@@ -439,7 +509,7 @@ def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
     actions.double_click(element).perform()
@@ -456,7 +526,7 @@ def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
     global driver
     from selenium.webdriver.common.action_chains import ActionChains
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=1)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
     actions.context_click(element).perform()
@@ -767,7 +837,7 @@ def select_by_visible_text(locator_type: str, locator: str, text: str, _run_test
     from selenium.webdriver.support.ui import Select
     from selenium.common.exceptions import StaleElementReferenceException
 
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=10)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
 
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
@@ -781,3 +851,148 @@ def select_by_visible_text(locator_type: str, locator: str, text: str, _run_test
 
     log_function_definition(select_by_visible_text, locator_type, locator, text, _run_test_id=_run_test_id)
     return f"selected value '{text}' successfully"
+
+
+def select_by_value(locator_type: str, locator: str, value: str, _run_test_id='1') -> str:
+    """
+    Selects an option in a <select> element by its value attribute.
+
+    Usage:
+        select_by_value({'locator_type': 'css', 'locator': '#country', 'value': 'us'})
+        select_by_value({'locator_type': 'xpath', 'locator': '//select[@name=\"role\"]', 'value': 'admin'})
+    """
+    global driver
+    from selenium.webdriver.support.ui import Select
+    from selenium.common.exceptions import StaleElementReferenceException
+
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    try:
+        Select(element).select_by_value(value)
+    except StaleElementReferenceException:
+        element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+        Select(element).select_by_value(value)
+    log_function_definition(select_by_value, locator_type, locator, value, _run_test_id=_run_test_id)
+    return f"selected value '{value}' successfully"
+
+
+def get_element_text(locator_type: str, locator: str, _run_test_id='1') -> str:
+    """
+    Returns the visible text content of an element.
+
+    Usage:
+        get_element_text({'locator_type': 'css', 'locator': '.status-message'})
+        get_element_text({'locator_type': 'xpath', 'locator': '//h1'})
+    """
+    global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    text = element.text
+    log_function_definition(get_element_text, locator_type, locator, _run_test_id=_run_test_id)
+    return text
+
+
+def get_attribute(locator_type: str, locator: str, attribute: str, _run_test_id='1') -> str:
+    """
+    Returns the value of a specific HTML attribute of an element.
+
+    Usage:
+        get_attribute({'locator_type': 'css', 'locator': 'a.link', 'attribute': 'href'})
+        get_attribute({'locator_type': 'css', 'locator': 'input#email', 'attribute': 'value'})
+        get_attribute({'locator_type': 'css', 'locator': '#btn', 'attribute': 'disabled'})
+    """
+    global driver
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    value = element.get_attribute(attribute)
+    log_function_definition(get_attribute, locator_type, locator, attribute, _run_test_id=_run_test_id)
+    return value if value is not None else ''
+
+
+def press_key(locator_type: str, locator: str, key: str, _run_test_id='1') -> str:
+    """
+    Sends a keyboard key to an element.
+
+    Supported keys: ENTER, TAB, ESCAPE, SPACE, BACKSPACE, DELETE,
+                    ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT,
+                    HOME, END, PAGE_UP, PAGE_DOWN.
+
+    Usage:
+        press_key({'locator_type': 'css', 'locator': '#search', 'key': 'ENTER'})
+        press_key({'locator_type': 'css', 'locator': '#field', 'key': 'TAB'})
+    """
+    global driver
+    from selenium.webdriver.common.keys import Keys
+    key_map = {
+        'ENTER': Keys.ENTER, 'TAB': Keys.TAB,
+        'ESCAPE': Keys.ESCAPE, 'ESC': Keys.ESCAPE,
+        'SPACE': Keys.SPACE, 'BACKSPACE': Keys.BACKSPACE, 'DELETE': Keys.DELETE,
+        'ARROW_UP': Keys.ARROW_UP, 'ARROW_DOWN': Keys.ARROW_DOWN,
+        'ARROW_LEFT': Keys.ARROW_LEFT, 'ARROW_RIGHT': Keys.ARROW_RIGHT,
+        'HOME': Keys.HOME, 'END': Keys.END,
+        'PAGE_UP': Keys.PAGE_UP, 'PAGE_DOWN': Keys.PAGE_DOWN,
+    }
+    resolved_key = key_map.get(key.upper(), key)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    element.send_keys(resolved_key)
+    log_function_definition(press_key, locator_type, locator, key, _run_test_id=_run_test_id)
+    return f"pressed {key}"
+
+
+def handle_alert(action: str = 'accept', text: str = '', _run_test_id='1') -> str:
+    """
+    Handles a JavaScript alert, confirm, or prompt dialog.
+
+    Args:
+        action: 'accept' (click OK), 'dismiss' (click Cancel),
+                'get_text' (read the alert message),
+                'send_keys' (type into a prompt then accept)
+        text: text to type when action is 'send_keys'
+
+    Usage:
+        handle_alert({'action': 'accept'})
+        handle_alert({'action': 'dismiss'})
+        handle_alert({'action': 'get_text'})
+        handle_alert({'action': 'send_keys', 'text': 'my input'})
+    """
+    global driver
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    selenium_driver = driver[_run_test_id].get_driver()
+    alert = WebDriverWait(selenium_driver, DEFAULT_TIMEOUT).until(EC.alert_is_present())
+    if action == 'get_text':
+        result = alert.text
+        log_function_definition(handle_alert, action, text, _run_test_id=_run_test_id)
+        return result
+    elif action == 'send_keys':
+        alert.send_keys(text)
+        alert.accept()
+        log_function_definition(handle_alert, action, text, _run_test_id=_run_test_id)
+        return "sent keys and accepted alert"
+    elif action == 'dismiss':
+        alert.dismiss()
+        log_function_definition(handle_alert, action, text, _run_test_id=_run_test_id)
+        return "alert dismissed"
+    else:
+        alert.accept()
+        log_function_definition(handle_alert, action, text, _run_test_id=_run_test_id)
+        return "alert accepted"
+
+
+def hover(locator_type: str, locator: str, _run_test_id='1') -> str:
+    """
+    Hovers the mouse over an element without clicking.
+    Useful for triggering dropdown menus or tooltips.
+
+    Usage:
+        hover({'locator_type': 'css', 'locator': '#nav-menu'})
+        hover({'locator_type': 'xpath', 'locator': '//li[@class=\"dropdown\"]'})
+    """
+    global driver
+    from selenium.webdriver.common.action_chains import ActionChains
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    ActionChains(driver[_run_test_id].get_driver()).move_to_element(element).perform()
+    log_function_definition(hover, locator_type, locator, _run_test_id=_run_test_id)
+    return "hovered"
