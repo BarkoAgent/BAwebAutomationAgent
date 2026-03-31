@@ -2,7 +2,9 @@
 import asyncio
 import logging
 import os
+import signal
 import sys
+import threading
 from dotenv import load_dotenv
 import certifi
 
@@ -48,9 +50,29 @@ async def main():
     except Exception as e:
         logging.exception(f"Agent encountered an error: {e}")
 
+_shutdown_started = False
+_shutdown_lock = threading.Lock()
+
+def _sigint_handler(signum, frame):
+    global _shutdown_started
+    with _shutdown_lock:
+        if _shutdown_started:
+            return  # Ignore subsequent Ctrl+C during cleanup
+        _shutdown_started = True
+    raise KeyboardInterrupt()
+
 if __name__ == "__main__":
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    signal.signal(signal.SIGINT, _sigint_handler)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        agent_func.stop_all_drivers()
+        pass
+    finally:
+        try:
+            agent_func.stop_all_drivers()
+        except Exception:
+            pass
         logging.info("Client stopped manually.")
+        os._exit(0)

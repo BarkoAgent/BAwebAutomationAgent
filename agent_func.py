@@ -2,6 +2,7 @@ import inspect
 import re
 import textwrap
 import os
+import sys
 import json
 import time
 import random
@@ -113,7 +114,9 @@ def clean_html(html_content):
     return html_content
 
 def stop_all_drivers():
+    import subprocess
     global driver
+
     for run_id, drv in list(driver.items()):
         try:
             streaming.stop_stream(run_id)
@@ -123,13 +126,43 @@ def stop_all_drivers():
             file_system.clear_downloads(run_id)
         except Exception:
             pass
-        try:
-            drv.quit()
-            print(f"✅ Driver '{run_id}' stopped.")
-        except Exception as e:
-            print(f"⚠️ Error stopping driver '{run_id}': {e}")
+
+    if sys.platform == 'win32':
+        # On Windows, collect all chromedriver PIDs and kill their entire
+        # process trees in one shot — no waiting, no per-driver timeouts.
+        pids = []
+        for run_id, drv in list(driver.items()):
+            try:
+                proc = drv.get_driver().service.process
+                if proc and proc.pid:
+                    pids.append(str(proc.pid))
+            except Exception:
+                pass
+        if pids:
+            try:
+                args = ['taskkill', '/F', '/T']
+                for pid in pids:
+                    args += ['/PID', pid]
+                subprocess.run(args, capture_output=True)
+                print(f"Force-killed {len(pids)} chromedriver process tree(s).")
+            except Exception as e:
+                print(f"⚠️ taskkill failed: {e}")
+    else:
+        import threading
+        for run_id, drv in list(driver.items()):
+            try:
+                t = threading.Thread(target=drv.quit, daemon=True)
+                t.start()
+                t.join(timeout=3)
+                if t.is_alive():
+                    print(f"⚠️ Driver '{run_id}' quit timed out, skipping.")
+                else:
+                    print(f"✅ Driver '{run_id}' stopped.")
+            except Exception as e:
+                print(f"⚠️ Error stopping driver '{run_id}': {e}")
+
     driver.clear()
-    print("🗑️ All drivers stopped and entries cleared.")
+    print("All drivers stopped and entries cleared.")
 
 def log_function_definition(fn, *args, **kwargs):
     """
