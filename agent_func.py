@@ -7,6 +7,8 @@ import time
 import random
 import string
 import logging
+import functools
+import sys
 import ba_ws_sdk.streaming as streaming
 import ba_ws_sdk.file_system as file_system
 from testui.support.testui_driver import TestUIDriver
@@ -19,6 +21,81 @@ run_test_id = ""
 
 # Files to ignore when scanning the attachments directory
 _IGNORED_FILES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
+
+
+_ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+def _sanitize_error_message(raw: str) -> str:
+    """Extract the human-readable part of a testui exception, stripping tracebacks.
+
+    testui appends traceback lines by direct string concatenation (with ANSI color
+    codes as delimiters), so a traceback may appear mid-line rather than on its own
+    line. We strip ANSI codes first, then cut at the first File "..." occurrence.
+    """
+    if not raw or not raw.strip():
+        return raw
+
+    # Remove ANSI escape codes so traceback markers are not hidden inside them
+    clean = _ANSI_ESCAPE_RE.sub('', raw)
+
+    _SKIP_LINES = {
+        'There were errors during the UI testing, check the logs:',
+        'There were errors during the UI testing, check the logs',
+    }
+
+    meaningful = []
+    for line in clean.splitlines():
+        stripped = line.strip()
+
+        # Skip known boilerplate header lines
+        if stripped in _SKIP_LINES:
+            continue
+
+        # Stop at a standalone Traceback header
+        if stripped.startswith('Traceback (most recent call last):'):
+            break
+
+        # Detect File "..." pattern — may be at start (pure traceback line)
+        # or embedded mid-line (traceback concatenated to the message)
+        file_idx = line.find('  File "')
+        if file_idx == 0:
+            # This line is entirely a traceback entry — stop
+            break
+        elif file_idx > 0:
+            # Traceback was concatenated onto the end of the message line
+            prefix = line[:file_idx].strip()
+            # Strip leading device-name prefix (e.g. "Device: ", "Chrome: ")
+            if ': ' in prefix:
+                prefix = prefix[prefix.index(': ') + 2:]
+            if prefix:
+                meaningful.append(prefix)
+            break
+
+        # Skip leading empty lines
+        if not stripped and not meaningful:
+            continue
+
+        # Strip device-name prefix (e.g. "Device: Element was not found...")
+        if ': ' in stripped:
+            candidate = stripped[:stripped.index(': ')]
+            if ' ' not in candidate:  # device names have no spaces
+                stripped = stripped[len(candidate) + 2:]
+
+        if stripped:
+            meaningful.append(stripped)
+
+    return ' '.join(meaningful) if meaningful else raw
+
+
+def _error_sanitizer(fn):
+    """Wrap fn so any exception is re-raised as RuntimeError with a clean message."""
+    @functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            raise RuntimeError(_sanitize_error_message(str(e))) from None
+    return _wrapper
 
 
 def _is_valid_download(name: str) -> bool:
@@ -996,3 +1073,15 @@ def hover(locator_type: str, locator: str, _run_test_id='1') -> str:
     ActionChains(driver[_run_test_id].get_driver()).move_to_element(element).perform()
     log_function_definition(hover, locator_type, locator, _run_test_id=_run_test_id)
     return "hovered"
+
+
+# Wrap all public functions with error sanitization so webapp users never see
+# raw tracebacks or server file paths in error messages.
+_mod = sys.modules[__name__]
+for _name in list(vars(_mod)):
+    if _name.startswith('_'):
+        continue
+    _fn = getattr(_mod, _name)
+    if callable(_fn) and not isinstance(_fn, type) and inspect.isfunction(_fn):
+        setattr(_mod, _name, _error_sanitizer(_fn))
+del _mod, _name, _fn
