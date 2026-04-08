@@ -403,7 +403,7 @@ def maximize_window(_run_test_id='1'):
         maximize_window({})
     """
     global driver
-    driver[_run_test_id].get_driver().maximize_window()
+    driver[_run_test_id].get_driver().set_window_size(1280, 800)
     log_function_definition(maximize_window, _run_test_id=_run_test_id)
     return "success maximizing"
 
