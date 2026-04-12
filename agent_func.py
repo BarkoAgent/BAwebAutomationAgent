@@ -24,6 +24,42 @@ run_test_id = ""
 _IGNORED_FILES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
 
 
+def _capture_error_frame(run_id: str, func_name: str) -> None:
+    """
+    Take a plain screenshot (no element highlight) when a step fails.
+    Stored as a step frame tagged with '{func_name} (error)' so the frontend
+    can display what was on screen at the moment of the error.
+    Best-effort — never raises, so it never masks the original exception.
+    """
+    recording_active = run_id in streaming._RECORDING_FLAGS
+    logging.info(
+        f"[ErrorCapture] {func_name} failed — capturing error screenshot "
+        f"(run_id={run_id}, recording_active={recording_active})"
+    )
+    try:
+        if not recording_active:
+            logging.warning(
+                f"[ErrorCapture] Recording not active for {run_id}; "
+                "activating it so the error frame can be stored."
+            )
+            streaming.start_recording(run_id)
+        driver_obj = streaming._CAPTURE_DRIVERS.get(run_id)
+        if driver_obj is None:
+            return
+        selenium_driver = streaming._get_selenium_driver(driver_obj)
+        if selenium_driver is None:
+            return
+        streaming._capture_step_frame_selenium(
+            run_id=run_id,
+            selenium_driver=selenium_driver,
+            func_name=f"{func_name} (error)",
+            element_hint=None,
+        )
+        logging.info(f"[ErrorCapture] Error screenshot stored for {func_name}")
+    except Exception as exc:
+        logging.warning(f"[ErrorCapture] Error screenshot failed for {func_name}: {exc}")
+
+
 _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*m')
 
 def _sanitize_error_message(raw: str) -> str:
@@ -443,7 +479,11 @@ def navigate_to_url(url: str, _run_test_id='1', use_vars='false') -> str:
     global driver, test_variables
     if use_vars == 'true' and _run_test_id in test_variables:
         url = test_variables[_run_test_id].get(url, url)
-    driver[_run_test_id].navigate_to(url=url)
+    try:
+        driver[_run_test_id].navigate_to(url=url)
+    except Exception:
+        _capture_error_frame(_run_test_id, "navigate_to_url")
+        raise
     log_function_definition(navigate_to_url, url, _run_test_id=_run_test_id)
     return url
 
@@ -464,7 +504,11 @@ def send_keys(locator_type: str, locator: str, value: str, _run_test_id='1', use
     if use_vars == 'true' and _run_test_id in test_variables:
         value = test_variables[_run_test_id].get(value, value)
 
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).send_keys(value=value)
+    try:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).send_keys(value=value)
+    except Exception:
+        _capture_error_frame(_run_test_id, "send_keys")
+        raise
     log_function_definition(send_keys, locator_type, locator, value, _run_test_id=_run_test_id)
     return "sent keys"
 
@@ -477,7 +521,11 @@ def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
         exists({'locator_type': 'css', 'locator': '.nav'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    try:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    except Exception:
+        _capture_error_frame(_run_test_id, "exists")
+        raise
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
@@ -495,7 +543,11 @@ def exists_with_text(text: str, _run_test_id='1', use_vars: str = 'false') -> st
     if use_vars == 'true' and _run_test_id in test_variables:
         text = test_variables[_run_test_id].get(text, text)
     locator = f"//*[contains(text(), '{text}')]"
-    driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    try:
+        driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    except Exception:
+        _capture_error_frame(_run_test_id, "exists_with_text")
+        raise
     log_function_definition(exists_with_text, text, _run_test_id=_run_test_id)
     return "exists (text)"
 
@@ -508,7 +560,11 @@ def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
         does_not_exist({'locator_type': 'xpath', 'locator': '//div[@id=\"loading\"]'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    try:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    except Exception:
+        _capture_error_frame(_run_test_id, "does_not_exist")
+        raise
     log_function_definition(does_not_exist, locator_type, locator, _run_test_id=_run_test_id)
     return "doesn't exists"
 
@@ -555,10 +611,14 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
         scroll_to_element({'locator_type': 'css', 'locator': '#footer'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
-    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    current_driver_instance = driver[_run_test_id].get_driver()
-    current_driver_instance.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
+    try:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+        element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+        current_driver_instance = driver[_run_test_id].get_driver()
+        current_driver_instance.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
+    except Exception:
+        _capture_error_frame(_run_test_id, "scroll_to_element")
+        raise
     log_function_definition(scroll_to_element, locator_type, locator, _run_test_id=_run_test_id)
     return "scrolled"
 
@@ -573,12 +633,16 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     with synthetic event handlers), use js_click instead.
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(DEFAULT_TIMEOUT)
-    from selenium.webdriver.common.action_chains import ActionChains
-    selenium_driver = driver[_run_test_id].get_driver()
-    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    ActionChains(selenium_driver).move_to_element(element).perform()
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
+    try:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(DEFAULT_TIMEOUT)
+        from selenium.webdriver.common.action_chains import ActionChains
+        selenium_driver = driver[_run_test_id].get_driver()
+        element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+        ActionChains(selenium_driver).move_to_element(element).perform()
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
+    except Exception:
+        _capture_error_frame(_run_test_id, "click")
+        raise
     log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
     return "clicked successfully on the element"
 
@@ -618,11 +682,15 @@ def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
         double_click({'locator_type': 'xpath', 'locator': '//button[@id=\"save\"]'})
     """
     global driver
-    from selenium.webdriver.common.action_chains import ActionChains
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
-    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    actions = ActionChains(driver[_run_test_id].get_driver())
-    actions.double_click(element).perform()
+    try:
+        from selenium.webdriver.common.action_chains import ActionChains
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+        element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+        actions = ActionChains(driver[_run_test_id].get_driver())
+        actions.double_click(element).perform()
+    except Exception:
+        _capture_error_frame(_run_test_id, "double_click")
+        raise
     log_function_definition(double_click, locator_type, locator, _run_test_id=_run_test_id)
     return "double clicked"
 
@@ -635,11 +703,15 @@ def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
         right_click({'locator_type': 'css', 'locator': '.item .menu'})
     """
     global driver
-    from selenium.webdriver.common.action_chains import ActionChains
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
-    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    actions = ActionChains(driver[_run_test_id].get_driver())
-    actions.context_click(element).perform()
+    try:
+        from selenium.webdriver.common.action_chains import ActionChains
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+        element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+        actions = ActionChains(driver[_run_test_id].get_driver())
+        actions.context_click(element).perform()
+    except Exception:
+        _capture_error_frame(_run_test_id, "right_click")
+        raise
     log_function_definition(right_click, locator_type, locator, _run_test_id=_run_test_id)
     return "right clicked"
 
@@ -947,17 +1019,21 @@ def select_by_visible_text(locator_type: str, locator: str, text: str, _run_test
     from selenium.webdriver.support.ui import Select
     from selenium.common.exceptions import StaleElementReferenceException
 
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
-
-    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    actions = ActionChains(driver[_run_test_id].get_driver())
-    actions.move_to_element(element).perform()
-
     try:
-        Select(element).select_by_visible_text(text)
-    except StaleElementReferenceException:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+
         element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-        Select(element).select_by_visible_text(text)
+        actions = ActionChains(driver[_run_test_id].get_driver())
+        actions.move_to_element(element).perform()
+
+        try:
+            Select(element).select_by_visible_text(text)
+        except StaleElementReferenceException:
+            element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+            Select(element).select_by_visible_text(text)
+    except Exception:
+        _capture_error_frame(_run_test_id, "select_by_visible_text")
+        raise
 
     log_function_definition(select_by_visible_text, locator_type, locator, text, _run_test_id=_run_test_id)
     return f"selected value '{text}' successfully"
@@ -975,13 +1051,17 @@ def select_by_value(locator_type: str, locator: str, value: str, _run_test_id='1
     from selenium.webdriver.support.ui import Select
     from selenium.common.exceptions import StaleElementReferenceException
 
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
-    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     try:
-        Select(element).select_by_value(value)
-    except StaleElementReferenceException:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
         element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-        Select(element).select_by_value(value)
+        try:
+            Select(element).select_by_value(value)
+        except StaleElementReferenceException:
+            element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+            Select(element).select_by_value(value)
+    except Exception:
+        _capture_error_frame(_run_test_id, "select_by_value")
+        raise
     log_function_definition(select_by_value, locator_type, locator, value, _run_test_id=_run_test_id)
     return f"selected value '{value}' successfully"
 
