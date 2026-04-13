@@ -24,6 +24,76 @@ run_test_id = ""
 _IGNORED_FILES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
 
 
+def _capture_step_now(run_id: str, func_name: str, element_hint: dict = None) -> None:
+    """
+    Take a synchronous step-frame screenshot, bypassing the async wrapper.
+
+    streaming.capture_step_frame() detects a running event loop (always present
+    because client.py uses asyncio.run(main())) and uses loop.create_task(),
+    which only schedules the screenshot — it does not take it immediately.  By
+    the time the task runs, subsequent DOM changes (e.g. a select completing)
+    have already happened, so pre- and post-action frames look identical.
+
+    This function calls _capture_step_frame_selenium directly so the screenshot
+    is taken at the exact call site, before any DOM change.
+    """
+    driver_obj = streaming._CAPTURE_DRIVERS.get(run_id)
+    if driver_obj is None:
+        return
+    selenium_driver = streaming._get_selenium_driver(driver_obj)
+    if selenium_driver is None:
+        return
+    streaming._capture_step_frame_selenium(
+        run_id=run_id,
+        selenium_driver=selenium_driver,
+        func_name=func_name,
+        element_hint=element_hint,
+    )
+
+
+def _drop_recent_timer_frames(run_id: str, within_seconds: float = 1.5) -> None:
+    """
+    Remove timer frames captured within `within_seconds` ago. Two-pass clean-up:
+
+    Pass 1 (trailing): drops recent timer frames from the END of the list —
+      catches timers that fired after the previous step capture.
+    Pass 2 (pre-step): scans backward past the most recent step frame and drops
+      any consecutive recent timer frames immediately before it — catches timers
+      that sneak in between a _drop call and the subsequent capture_step_frame.
+
+    Call this both BEFORE and AFTER capture_step_frame to fully eliminate
+    redundant timer frames around each action.
+    """
+    cutoff = time.time() - within_seconds
+    removed = 0
+    with streaming._LOCK:
+        frames = streaming._RECORDED_FRAMES.get(run_id)
+        if not frames:
+            return
+
+        while frames and frames[-1].get("trigger") == "timer" and frames[-1]["timestamp"] >= cutoff:
+            frames.pop()
+            removed += 1
+
+        step_idx = None
+        for i in range(len(frames) - 1, -1, -1):
+            if frames[i].get("trigger") == "step":
+                step_idx = i
+                break
+        if step_idx is not None and step_idx > 0:
+            to_remove = []
+            i = step_idx - 1
+            while i >= 0 and frames[i].get("triggzer") == "timer" and frames[i]["timestamp"] >= cutoff:
+                to_remove.append(i)
+                i -= 1
+            for idx in sorted(to_remove, reverse=True):
+                frames.pop(idx)
+            removed += len(to_remove)
+
+    if removed:
+        logging.debug(f"[StepCapture] Dropped {removed} recent timer frame(s) for {run_id} to prevent duplicate")
+
+
 _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*m')
 
 def _sanitize_error_message(raw: str) -> str:
@@ -496,6 +566,9 @@ def exists_with_text(text: str, _run_test_id='1', use_vars: str = 'false') -> st
         text = test_variables[_run_test_id].get(text, text)
     locator = f"//*[contains(text(), '{text}')]"
     driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+    _drop_recent_timer_frames(_run_test_id)
+    _capture_step_now(_run_test_id, "exists_with_text", {"locator_type": "xpath", "locator": locator})
+    _drop_recent_timer_frames(_run_test_id)
     log_function_definition(exists_with_text, text, _run_test_id=_run_test_id)
     return "exists (text)"
 
@@ -578,6 +651,9 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     selenium_driver = driver[_run_test_id].get_driver()
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     ActionChains(selenium_driver).move_to_element(element).perform()
+    _drop_recent_timer_frames(_run_test_id)
+    _capture_step_now(_run_test_id, "click", {"locator_type": locator_type, "locator": locator})
+    _drop_recent_timer_frames(_run_test_id)
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
     log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
     return "clicked successfully on the element"
@@ -622,6 +698,9 @@ def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
+    _drop_recent_timer_frames(_run_test_id)
+    _capture_step_now(_run_test_id, "double_click", {"locator_type": locator_type, "locator": locator})
+    _drop_recent_timer_frames(_run_test_id)
     actions.double_click(element).perform()
     log_function_definition(double_click, locator_type, locator, _run_test_id=_run_test_id)
     return "double clicked"
@@ -639,6 +718,9 @@ def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actions = ActionChains(driver[_run_test_id].get_driver())
+    _drop_recent_timer_frames(_run_test_id)
+    _capture_step_now(_run_test_id, "right_click", {"locator_type": locator_type, "locator": locator})
+    _drop_recent_timer_frames(_run_test_id)
     actions.context_click(element).perform()
     log_function_definition(right_click, locator_type, locator, _run_test_id=_run_test_id)
     return "right clicked"
@@ -953,11 +1035,19 @@ def select_by_visible_text(locator_type: str, locator: str, text: str, _run_test
     actions = ActionChains(driver[_run_test_id].get_driver())
     actions.move_to_element(element).perform()
 
+    _drop_recent_timer_frames(_run_test_id)
+    _capture_step_now(_run_test_id, "select_by_visible_text", {"locator_type": locator_type, "locator": locator})
+    _drop_recent_timer_frames(_run_test_id)
+
     try:
         Select(element).select_by_visible_text(text)
     except StaleElementReferenceException:
         element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
         Select(element).select_by_visible_text(text)
+
+    _drop_recent_timer_frames(_run_test_id)
+    _capture_step_now(_run_test_id, "select_by_visible_text (selected)", {"locator_type": locator_type, "locator": locator})
+    _drop_recent_timer_frames(_run_test_id)
 
     log_function_definition(select_by_visible_text, locator_type, locator, text, _run_test_id=_run_test_id)
     return f"selected value '{text}' successfully"
@@ -977,11 +1067,21 @@ def select_by_value(locator_type: str, locator: str, value: str, _run_test_id='1
 
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+
+    _drop_recent_timer_frames(_run_test_id)
+    _capture_step_now(_run_test_id, "select_by_value", {"locator_type": locator_type, "locator": locator})
+    _drop_recent_timer_frames(_run_test_id)
+
     try:
         Select(element).select_by_value(value)
     except StaleElementReferenceException:
         element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
         Select(element).select_by_value(value)
+
+    _drop_recent_timer_frames(_run_test_id)
+    _capture_step_now(_run_test_id, "select_by_value (selected)", {"locator_type": locator_type, "locator": locator})
+    _drop_recent_timer_frames(_run_test_id)
+
     log_function_definition(select_by_value, locator_type, locator, value, _run_test_id=_run_test_id)
     return f"selected value '{value}' successfully"
 
