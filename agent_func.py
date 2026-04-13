@@ -71,12 +71,10 @@ def _drop_recent_timer_frames(run_id: str, within_seconds: float = 1.5) -> None:
         if not frames:
             return
 
-        # Pass 1: drop trailing recent timer frames
         while frames and frames[-1].get("trigger") == "timer" and frames[-1]["timestamp"] >= cutoff:
             frames.pop()
             removed += 1
 
-        # Pass 2: drop recent timers that immediately precede the last step frame
         step_idx = None
         for i in range(len(frames) - 1, -1, -1):
             if frames[i].get("trigger") == "step":
@@ -85,7 +83,7 @@ def _drop_recent_timer_frames(run_id: str, within_seconds: float = 1.5) -> None:
         if step_idx is not None and step_idx > 0:
             to_remove = []
             i = step_idx - 1
-            while i >= 0 and frames[i].get("trigger") == "timer" and frames[i]["timestamp"] >= cutoff:
+            while i >= 0 and frames[i].get("triggzer") == "timer" and frames[i]["timestamp"] >= cutoff:
                 to_remove.append(i)
                 i -= 1
             for idx in sorted(to_remove, reverse=True):
