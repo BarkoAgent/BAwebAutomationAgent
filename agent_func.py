@@ -113,7 +113,7 @@ def clean_html(html_content):
         html_content = re.sub(rf'<{tag}[^>]*>.*?</{tag}>', '', html_content, flags=re.DOTALL)
     return html_content
 
-def stop_all_drivers():
+def stop_all_drivers(**kwargs):
     import subprocess
     global driver
 
@@ -273,8 +273,8 @@ def create_driver(_run_test_id='1'):
     if os.getenv("SELENIUM_URL"):
         driver[_run_test_id] = driver[_run_test_id].set_remote_url(os.getenv("SELENIUM_URL"))
     else:
-        pass
-        options.add_argument("--headless")
+        options.add_argument("--headless=new")
+        options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
     streaming.stop_stream(_run_test_id)
     driver[_run_test_id] = driver[_run_test_id].set_selenium_driver(chrome_options=options)
     # CDP command to enable downloads — required for headless Chrome
@@ -290,6 +290,16 @@ def create_driver(_run_test_id='1'):
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "driver created"
+
+
+def _xpath_escape(s: str) -> str:
+    """Escape a string for safe use in XPath contains()."""
+    if "'" not in s:
+        return f"'{s}'"
+    if '"' not in s:
+        return f'"{s}"'
+    parts = s.split("'")
+    return "concat('" + "',\"'\",'".join(parts) + "')"
 
 
 def _expand_charset(spec):
@@ -481,11 +491,19 @@ def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
-def exists_with_text(text: str, _run_test_id='1', use_vars: str = 'false') -> str:
+def exists_with_text(text: str, scope_locator_type: str = '', scope_locator: str = '', _run_test_id='1', use_vars: str = 'false') -> dict:
     """
-    Asserts that an element containing the given text exists (uses XPath).
-    Usage (substring match):
+    Asserts that an element containing the given text exists.
+    Optionally scope the search to descendants of a container element so the match
+    cannot accidentally come from an unrelated region of the page. The scope locator
+    keeps its native type (css or xpath) — use whatever is stable for the page.
+
+    Usage (substring match anywhere on page):
         exists_with_text({'text': 'Welcome'})
+
+    Usage scoped to a container (recommended for "verify that <region> contains <text>"):
+        exists_with_text({'text': 'Test t-shirt', 'scope_locator_type': 'css', 'scope_locator': '#cart_content'})
+        exists_with_text({'text': 'Test t-shirt', 'scope_locator_type': 'xpath', 'scope_locator': "//*[@id='cart_content']"})
 
     Usage with variables:
         set_variable({'name': 'u', 'value': 'alice'})
@@ -494,10 +512,55 @@ def exists_with_text(text: str, _run_test_id='1', use_vars: str = 'false') -> st
     global driver
     if use_vars == 'true' and _run_test_id in test_variables:
         text = test_variables[_run_test_id].get(text, text)
-    locator = f"//*[contains(text(), '{text}')]"
+
+    def _bbox_from_element(el):
+        try:
+            rect = el.rect
+            return {
+                "x": rect["x"],
+                "y": rect["y"],
+                "width": rect["width"],
+                "height": rect["height"],
+            }
+        except Exception:
+            return None
+
+    if scope_locator:
+        from selenium.webdriver.common.by import By
+        driver[_run_test_id].e(locator_type=scope_locator_type, locator=scope_locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+        deadline = time.time() + DEFAULT_TIMEOUT
+        last_err = None
+        while time.time() < deadline:
+            try:
+                scope_el = driver[_run_test_id].e(locator_type=scope_locator_type, locator=scope_locator).get_element()
+                matches = scope_el.find_elements(By.XPATH, f".//*[contains(text(), {_xpath_escape(text)})]")
+                if matches:
+                    log_function_definition(exists_with_text, text, scope_locator_type=scope_locator_type, scope_locator=scope_locator, _run_test_id=_run_test_id)
+                    result = {"status": "exists (text, scoped)"}
+                    bbox = _bbox_from_element(matches[0])
+                    if bbox:
+                        result["bounding_box"] = bbox
+                    return result
+            except Exception as e:
+                last_err = e
+            time.sleep(0.5)
+        raise AssertionError(
+            f"exists_with_text failed: text '{text}' not found inside scope "
+            f"({scope_locator_type}='{scope_locator}'){f' — last error: {last_err}' if last_err else ''}"
+        )
+
+    locator = f"//*[contains(text(), {_xpath_escape(text)})]"
     driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
-    log_function_definition(exists_with_text, text, _run_test_id=_run_test_id)
-    return "exists (text)"
+    log_function_definition(exists_with_text, text, scope_locator_type=scope_locator_type, scope_locator=scope_locator, _run_test_id=_run_test_id)
+    result = {"status": "exists (text)"}
+    try:
+        el = driver[_run_test_id].e(locator_type='xpath', locator=locator).get_element()
+        bbox = _bbox_from_element(el)
+        if bbox:
+            result["bounding_box"] = bbox
+    except Exception:
+        pass
+    return result
 
 
 def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
@@ -513,21 +576,62 @@ def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
     return "doesn't exists"
 
 
-def assert_text_equals(locator_type: str, locator: str, expected_text: str, _run_test_id='1') -> str:
+def assert_text_equals(locator_type: str, locator: str, expected_text: str, scope_locator_type: str = '', scope_locator: str = '', _run_test_id='1') -> str:
     """
     Asserts that the visible text of an element exactly equals expected_text.
     Raises AssertionError with a clear message if the text does not match.
 
-    Usage:
+    Optionally scope the element lookup to descendants of a container element so
+    the target is disambiguated when the same locator would match multiple regions
+    (e.g., product grid vs. cart). The scope locator keeps its native type.
+
+    Usage (unscoped):
         assert_text_equals({'locator_type': 'css', 'locator': 'h1', 'expected_text': 'Welcome'})
+
+    Usage scoped to a container (recommended for "verify that <region> shows <text>"):
+        assert_text_equals({'locator_type': 'css', 'locator': '.product-name',
+                            'scope_locator_type': 'css', 'scope_locator': '#cart_content',
+                            'expected_text': 'Test t-shirt (should be 15 in total)'})
     """
     global driver
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
-    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    if scope_locator:
+        from selenium.webdriver.common.by import By
+        driver[_run_test_id].e(locator_type=scope_locator_type, locator=scope_locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+        scope_el = driver[_run_test_id].e(locator_type=scope_locator_type, locator=scope_locator).get_element()
+        by_map = {'css': By.CSS_SELECTOR, 'xpath': By.XPATH, 'id': By.ID, 'name': By.NAME,
+                  'class_name': By.CLASS_NAME, 'tag_name': By.TAG_NAME, 'link_text': By.LINK_TEXT,
+                  'partial_link_text': By.PARTIAL_LINK_TEXT}
+        by = by_map.get(locator_type, By.CSS_SELECTOR)
+        inner_locator = locator
+        if by == By.XPATH and not locator.startswith('.'):
+            inner_locator = '.' + locator if locator.startswith('//') else './/' + locator.lstrip('/')
+        deadline = time.time() + DEFAULT_TIMEOUT
+        last_err = None
+        element = None
+        while time.time() < deadline:
+            try:
+                scope_el = driver[_run_test_id].e(locator_type=scope_locator_type, locator=scope_locator).get_element()
+                matches = scope_el.find_elements(by, inner_locator)
+                if matches:
+                    element = matches[0]
+                    break
+            except Exception as e:
+                last_err = e
+            time.sleep(0.5)
+        if element is None:
+            raise AssertionError(
+                f"assert_text_equals failed: locator '{locator}' ({locator_type}) not found inside scope "
+                f"({scope_locator_type}='{scope_locator}'){f' — last error: {last_err}' if last_err else ''}"
+            )
+    else:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+        element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
     actual_text = element.text
     if actual_text != expected_text:
         raise AssertionError(f"assert_text_equals failed: expected '{expected_text}', got '{actual_text}'")
-    log_function_definition(assert_text_equals, locator_type, locator, expected_text, _run_test_id=_run_test_id)
+    log_function_definition(assert_text_equals, locator_type, locator, expected_text,
+                            scope_locator_type=scope_locator_type, scope_locator=scope_locator,
+                            _run_test_id=_run_test_id)
     return f"text equals '{expected_text}'"
 
 
