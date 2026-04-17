@@ -274,7 +274,7 @@ def create_driver(_run_test_id='1'):
         driver[_run_test_id] = driver[_run_test_id].set_remote_url(os.getenv("SELENIUM_URL"))
     else:
         options.add_argument("--headless=new")
-    options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
+        options.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36")
     streaming.stop_stream(_run_test_id)
     driver[_run_test_id] = driver[_run_test_id].set_selenium_driver(chrome_options=options)
     # CDP command to enable downloads — required for headless Chrome
@@ -290,6 +290,16 @@ def create_driver(_run_test_id='1'):
     driver[_run_test_id].navigate_to("https://google.com")
     log_function_definition(create_driver, _run_test_id=_run_test_id)
     return "driver created"
+
+
+def _xpath_escape(s: str) -> str:
+    """Escape a string for safe use in XPath contains()."""
+    if "'" not in s:
+        return f"'{s}'"
+    if '"' not in s:
+        return f'"{s}"'
+    parts = s.split("'")
+    return "concat('" + "',\"'\",'".join(parts) + "')"
 
 
 def _expand_charset(spec):
@@ -511,7 +521,7 @@ def exists_with_text(text: str, scope_locator_type: str = '', scope_locator: str
         while time.time() < deadline:
             try:
                 scope_el = driver[_run_test_id].e(locator_type=scope_locator_type, locator=scope_locator).get_element()
-                if scope_el.find_elements(By.XPATH, f".//*[contains(text(), '{text}')]"):
+                if scope_el.find_elements(By.XPATH, f".//*[contains(text(), {_xpath_escape(text)})]"):
                     log_function_definition(exists_with_text, text, scope_locator_type=scope_locator_type, scope_locator=scope_locator, _run_test_id=_run_test_id)
                     return "exists (text, scoped)"
             except Exception as e:
@@ -522,7 +532,7 @@ def exists_with_text(text: str, scope_locator_type: str = '', scope_locator: str
             f"({scope_locator_type}='{scope_locator}'){f' — last error: {last_err}' if last_err else ''}"
         )
 
-    locator = f"//*[contains(text(), '{text}')]"
+    locator = f"//*[contains(text(), {_xpath_escape(text)})]"
     driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(exists_with_text, text, scope_locator_type=scope_locator_type, scope_locator=scope_locator, _run_test_id=_run_test_id)
     return "exists (text)"
