@@ -491,7 +491,7 @@ def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
 
-def exists_with_text(text: str, scope_locator_type: str = '', scope_locator: str = '', _run_test_id='1', use_vars: str = 'false') -> str:
+def exists_with_text(text: str, scope_locator_type: str = '', scope_locator: str = '', _run_test_id='1', use_vars: str = 'false') -> dict:
     """
     Asserts that an element containing the given text exists.
     Optionally scope the search to descendants of a container element so the match
