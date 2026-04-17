@@ -513,6 +513,18 @@ def exists_with_text(text: str, scope_locator_type: str = '', scope_locator: str
     if use_vars == 'true' and _run_test_id in test_variables:
         text = test_variables[_run_test_id].get(text, text)
 
+    def _bbox_from_element(el):
+        try:
+            rect = el.rect
+            return {
+                "x": rect["x"],
+                "y": rect["y"],
+                "width": rect["width"],
+                "height": rect["height"],
+            }
+        except Exception:
+            return None
+
     if scope_locator:
         from selenium.webdriver.common.by import By
         driver[_run_test_id].e(locator_type=scope_locator_type, locator=scope_locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
@@ -521,9 +533,14 @@ def exists_with_text(text: str, scope_locator_type: str = '', scope_locator: str
         while time.time() < deadline:
             try:
                 scope_el = driver[_run_test_id].e(locator_type=scope_locator_type, locator=scope_locator).get_element()
-                if scope_el.find_elements(By.XPATH, f".//*[contains(text(), {_xpath_escape(text)})]"):
+                matches = scope_el.find_elements(By.XPATH, f".//*[contains(text(), {_xpath_escape(text)})]")
+                if matches:
                     log_function_definition(exists_with_text, text, scope_locator_type=scope_locator_type, scope_locator=scope_locator, _run_test_id=_run_test_id)
-                    return "exists (text, scoped)"
+                    result = {"status": "exists (text, scoped)"}
+                    bbox = _bbox_from_element(matches[0])
+                    if bbox:
+                        result["bounding_box"] = bbox
+                    return result
             except Exception as e:
                 last_err = e
             time.sleep(0.5)
@@ -535,7 +552,15 @@ def exists_with_text(text: str, scope_locator_type: str = '', scope_locator: str
     locator = f"//*[contains(text(), {_xpath_escape(text)})]"
     driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     log_function_definition(exists_with_text, text, scope_locator_type=scope_locator_type, scope_locator=scope_locator, _run_test_id=_run_test_id)
-    return "exists (text)"
+    result = {"status": "exists (text)"}
+    try:
+        el = driver[_run_test_id].e(locator_type='xpath', locator=locator).get_element()
+        bbox = _bbox_from_element(el)
+        if bbox:
+            result["bounding_box"] = bbox
+    except Exception:
+        pass
+    return result
 
 
 def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
