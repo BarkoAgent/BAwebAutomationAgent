@@ -547,6 +547,52 @@ def assert_url_contains(expected_url: str, _run_test_id='1') -> str:
     return f"url contains '{expected_url}'"
 
 
+def assert_element_count(locator_type: str, locator: str, operator: str, count: int, _run_test_id='1') -> str:
+    """
+    Asserts the number of elements matching the locator satisfies a numeric condition.
+
+    Args:
+        operator: one of 'eq', 'gt', 'gte', 'lt', 'lte'
+                  eq  = equal to
+                  gt  = greater than
+                  gte = greater than or equal to
+                  lt  = less than
+                  lte = less than or equal to
+        count: the number to compare against
+
+    Usage:
+        assert_element_count({'locator_type': 'css', 'locator': '.car-item', 'operator': 'gt', 'count': 5})
+        assert_element_count({'locator_type': 'xpath', 'locator': '//tr[@class=\"result\"]', 'operator': 'gte', 'count': 1})
+    """
+    global driver
+    from selenium.webdriver.common.by import By
+
+    count = int(count)
+    by_map = {'css': By.CSS_SELECTOR, 'xpath': By.XPATH, 'id': By.ID,
+              'name': By.NAME, 'class': By.CLASS_NAME, 'tag': By.TAG_NAME}
+    by = by_map.get(locator_type.lower(), By.CSS_SELECTOR)
+    elements = driver[_run_test_id].get_driver().find_elements(by, locator)
+    actual = len(elements)
+
+    ops = {
+        'eq':  (actual == count, '=='),
+        'gt':  (actual > count,  '>'),
+        'gte': (actual >= count, '>='),
+        'lt':  (actual < count,  '<'),
+        'lte': (actual <= count, '<='),
+    }
+    if operator not in ops:
+        raise ValueError(f"assert_element_count: unknown operator '{operator}'. Use one of: eq, gt, gte, lt, lte")
+    passed, sym = ops[operator]
+    if not passed:
+        raise AssertionError(
+            f"assert_element_count failed: expected {actual} {sym} {count} "
+            f"(locator: {locator_type}='{locator}')"
+        )
+    log_function_definition(assert_element_count, locator_type, locator, operator, count, _run_test_id=_run_test_id)
+    return f"element count {actual} {sym} {count} — passed"
+
+
 def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
     """
     Scrolls until the element is visible in the viewport.
