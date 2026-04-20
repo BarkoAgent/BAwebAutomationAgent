@@ -655,6 +655,9 @@ def get_page_html(_run_test_id='1') -> str:
     content = driver[_run_test_id].get_driver().page_source
     html_content = clean_html(content)
     log_function_definition(get_page_html, _run_test_id=_run_test_id)
+    max_chars = int(os.getenv("MAX_PAGE_HTML_CHARS", "50000"))
+    if len(html_content) > max_chars:
+        html_content = html_content[:max_chars] + f"\n<!-- truncated: total={len(html_content)} chars -->"
     return html_content
 
 
@@ -691,6 +694,9 @@ def change_windows_tabs(_run_test_id='1') -> str:
     log_function_definition(change_windows_tabs, _run_test_id=_run_test_id)
     content = driver[_run_test_id].get_driver().page_source
     html_content = clean_html(content)
+    max_chars = int(os.getenv("MAX_PAGE_HTML_CHARS", "50000"))
+    if len(html_content) > max_chars:
+        html_content = html_content[:max_chars] + f"\n<!-- truncated: total={len(html_content)} chars -->"
     return html_content
 
 
