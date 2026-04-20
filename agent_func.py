@@ -571,23 +571,35 @@ def assert_element_count(locator_type: str, locator: str, operator: str, count: 
     by_map = {'css': By.CSS_SELECTOR, 'xpath': By.XPATH, 'id': By.ID,
               'name': By.NAME, 'class': By.CLASS_NAME, 'tag': By.TAG_NAME}
     by = by_map.get(locator_type.lower(), By.CSS_SELECTOR)
-    elements = driver[_run_test_id].get_driver().find_elements(by, locator)
-    actual = len(elements)
 
-    ops = {
-        'eq':  (actual == count, '=='),
-        'gt':  (actual > count,  '>'),
-        'gte': (actual >= count, '>='),
-        'lt':  (actual < count,  '<'),
-        'lte': (actual <= count, '<='),
+    ops_check = {
+        'eq':  (lambda a, c: a == c, '=='),
+        'gt':  (lambda a, c: a > c,  '>'),
+        'gte': (lambda a, c: a >= c, '>='),
+        'lt':  (lambda a, c: a < c,  '<'),
+        'lte': (lambda a, c: a <= c, '<='),
     }
-    if operator not in ops:
+    if operator not in ops_check:
         raise ValueError(f"assert_element_count: unknown operator '{operator}'. Use one of: eq, gt, gte, lt, lte")
-    passed, sym = ops[operator]
+
+    # Poll until the condition is met or DEFAULT_TIMEOUT is exhausted
+    selenium_driver = driver[_run_test_id].get_driver()
+    deadline = time.time() + DEFAULT_TIMEOUT
+    actual = 0
+    passed = False
+    fn, sym = ops_check[operator]
+    while time.time() < deadline:
+        elements = selenium_driver.find_elements(by, locator)
+        actual = len(elements)
+        if fn(actual, count):
+            passed = True
+            break
+        time.sleep(0.5)
+
     if not passed:
         raise AssertionError(
-            f"assert_element_count failed: expected {actual} {sym} {count} "
-            f"(locator: {locator_type}='{locator}')"
+            f"assert_element_count failed: found {actual} element(s) matching {locator_type}='{locator}', "
+            f"expected {actual} {sym} {count}"
         )
     log_function_definition(assert_element_count, locator_type, locator, operator, count, _run_test_id=_run_test_id)
     return f"element count {actual} {sym} {count} — passed"
