@@ -24,41 +24,6 @@ run_test_id = ""
 _IGNORED_FILES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
 
 
-def _capture_error_frame(run_id: str, func_name: str) -> None:
-    """
-    Take a plain screenshot (no element highlight) when a step fails.
-    Stored as a step frame tagged with '{func_name} (error)' so the frontend
-    can display what was on screen at the moment of the error.
-    Best-effort — never raises, so it never masks the original exception.
-    """
-    recording_active = run_id in streaming._RECORDING_FLAGS
-    logging.info(
-        f"[ErrorCapture] {func_name} failed — capturing error screenshot "
-        f"(run_id={run_id}, recording_active={recording_active})"
-    )
-    try:
-        if not recording_active:
-            logging.warning(
-                f"[ErrorCapture] Recording not active for {run_id}; "
-                "activating it so the error frame can be stored."
-            )
-            streaming.start_recording(run_id)
-        driver_obj = streaming._CAPTURE_DRIVERS.get(run_id)
-        if driver_obj is None:
-            return
-        selenium_driver = streaming._get_selenium_driver(driver_obj)
-        if selenium_driver is None:
-            return
-        streaming._capture_step_frame_selenium(
-            run_id=run_id,
-            selenium_driver=selenium_driver,
-            func_name=f"{func_name} (error)",
-            element_hint=None,
-        )
-        logging.info(f"[ErrorCapture] Error screenshot stored for {func_name}")
-    except Exception as exc:
-        logging.warning(f"[ErrorCapture] Error screenshot failed for {func_name}: {exc}")
-
 
 _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -482,7 +447,7 @@ def navigate_to_url(url: str, _run_test_id='1', use_vars='false') -> str:
     try:
         driver[_run_test_id].navigate_to(url=url)
     except Exception:
-        _capture_error_frame(_run_test_id, "navigate_to_url")
+        streaming.capture_error_frame(_run_test_id, "navigate_to_url")
         raise
     log_function_definition(navigate_to_url, url, _run_test_id=_run_test_id)
     return url
@@ -507,7 +472,7 @@ def send_keys(locator_type: str, locator: str, value: str, _run_test_id='1', use
     try:
         driver[_run_test_id].e(locator_type=locator_type, locator=locator).send_keys(value=value)
     except Exception:
-        _capture_error_frame(_run_test_id, "send_keys")
+        streaming.capture_error_frame(_run_test_id, "send_keys")
         raise
     log_function_definition(send_keys, locator_type, locator, value, _run_test_id=_run_test_id)
     return "sent keys"
@@ -524,7 +489,7 @@ def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
     try:
         driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     except Exception:
-        _capture_error_frame(_run_test_id, "exists")
+        streaming.capture_error_frame(_run_test_id, "exists")
         raise
     log_function_definition(exists, locator_type, locator, _run_test_id=_run_test_id)
     return "exists"
@@ -545,8 +510,11 @@ def exists_with_text(text: str, _run_test_id='1', use_vars: str = 'false') -> st
     locator = f"//*[contains(text(), '{text}')]"
     try:
         driver[_run_test_id].e(locator_type='xpath', locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+        streaming.drop_recent_timer_frames(_run_test_id)
+        streaming.capture_step_frame_sync(_run_test_id, "exists_with_text", {"locator_type": "xpath", "locator": locator})
+        streaming.drop_recent_timer_frames(_run_test_id)
     except Exception:
-        _capture_error_frame(_run_test_id, "exists_with_text")
+        streaming.capture_error_frame(_run_test_id, "exists_with_text")
         raise
     log_function_definition(exists_with_text, text, _run_test_id=_run_test_id)
     return "exists (text)"
@@ -563,7 +531,7 @@ def does_not_exist(locator_type: str, locator: str, _run_test_id='1') -> str:
     try:
         driver[_run_test_id].e(locator_type=locator_type, locator=locator).no().wait_until_exists(seconds=DEFAULT_TIMEOUT)
     except Exception:
-        _capture_error_frame(_run_test_id, "does_not_exist")
+        streaming.capture_error_frame(_run_test_id, "does_not_exist")
         raise
     log_function_definition(does_not_exist, locator_type, locator, _run_test_id=_run_test_id)
     return "doesn't exists"
@@ -617,7 +585,7 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
         current_driver_instance = driver[_run_test_id].get_driver()
         current_driver_instance.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});", element)
     except Exception:
-        _capture_error_frame(_run_test_id, "scroll_to_element")
+        streaming.capture_error_frame(_run_test_id, "scroll_to_element")
         raise
     log_function_definition(scroll_to_element, locator_type, locator, _run_test_id=_run_test_id)
     return "scrolled"
@@ -639,9 +607,12 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
         selenium_driver = driver[_run_test_id].get_driver()
         element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
         ActionChains(selenium_driver).move_to_element(element).perform()
+        streaming.drop_recent_timer_frames(_run_test_id)
+        streaming.capture_step_frame_sync(_run_test_id, "click", {"locator_type": locator_type, "locator": locator})
+        streaming.drop_recent_timer_frames(_run_test_id)
         driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
     except Exception:
-        _capture_error_frame(_run_test_id, "click")
+        streaming.capture_error_frame(_run_test_id, "click")
         raise
     log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
     return "clicked successfully on the element"
@@ -687,9 +658,12 @@ def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
         driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
         element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
         actions = ActionChains(driver[_run_test_id].get_driver())
+        streaming.drop_recent_timer_frames(_run_test_id)
+        streaming.capture_step_frame_sync(_run_test_id, "double_click", {"locator_type": locator_type, "locator": locator})
+        streaming.drop_recent_timer_frames(_run_test_id)
         actions.double_click(element).perform()
     except Exception:
-        _capture_error_frame(_run_test_id, "double_click")
+        streaming.capture_error_frame(_run_test_id, "double_click")
         raise
     log_function_definition(double_click, locator_type, locator, _run_test_id=_run_test_id)
     return "double clicked"
@@ -708,9 +682,12 @@ def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
         driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
         element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
         actions = ActionChains(driver[_run_test_id].get_driver())
+        streaming.drop_recent_timer_frames(_run_test_id)
+        streaming.capture_step_frame_sync(_run_test_id, "right_click", {"locator_type": locator_type, "locator": locator})
+        streaming.drop_recent_timer_frames(_run_test_id)
         actions.context_click(element).perform()
     except Exception:
-        _capture_error_frame(_run_test_id, "right_click")
+        streaming.capture_error_frame(_run_test_id, "right_click")
         raise
     log_function_definition(right_click, locator_type, locator, _run_test_id=_run_test_id)
     return "right clicked"
@@ -1026,13 +1003,21 @@ def select_by_visible_text(locator_type: str, locator: str, text: str, _run_test
         actions = ActionChains(driver[_run_test_id].get_driver())
         actions.move_to_element(element).perform()
 
+        streaming.drop_recent_timer_frames(_run_test_id)
+        streaming.capture_step_frame_sync(_run_test_id, "select_by_visible_text", {"locator_type": locator_type, "locator": locator})
+        streaming.drop_recent_timer_frames(_run_test_id)
+
         try:
             Select(element).select_by_visible_text(text)
         except StaleElementReferenceException:
             element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
             Select(element).select_by_visible_text(text)
+
+        streaming.drop_recent_timer_frames(_run_test_id)
+        streaming.capture_step_frame_sync(_run_test_id, "select_by_visible_text (selected)", {"locator_type": locator_type, "locator": locator})
+        streaming.drop_recent_timer_frames(_run_test_id)
     except Exception:
-        _capture_error_frame(_run_test_id, "select_by_visible_text")
+        streaming.capture_error_frame(_run_test_id, "select_by_visible_text")
         raise
 
     log_function_definition(select_by_visible_text, locator_type, locator, text, _run_test_id=_run_test_id)
@@ -1054,13 +1039,22 @@ def select_by_value(locator_type: str, locator: str, value: str, _run_test_id='1
     try:
         driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
         element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+
+        streaming.drop_recent_timer_frames(_run_test_id)
+        streaming.capture_step_frame_sync(_run_test_id, "select_by_value", {"locator_type": locator_type, "locator": locator})
+        streaming.drop_recent_timer_frames(_run_test_id)
+
         try:
             Select(element).select_by_value(value)
         except StaleElementReferenceException:
             element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
             Select(element).select_by_value(value)
+
+        streaming.drop_recent_timer_frames(_run_test_id)
+        streaming.capture_step_frame_sync(_run_test_id, "select_by_value (selected)", {"locator_type": locator_type, "locator": locator})
+        streaming.drop_recent_timer_frames(_run_test_id)
     except Exception:
-        _capture_error_frame(_run_test_id, "select_by_value")
+        streaming.capture_error_frame(_run_test_id, "select_by_value")
         raise
     log_function_definition(select_by_value, locator_type, locator, value, _run_test_id=_run_test_id)
     return f"selected value '{value}' successfully"
