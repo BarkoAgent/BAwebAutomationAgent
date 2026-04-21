@@ -2,7 +2,6 @@ import inspect
 import re
 import textwrap
 import os
-import sys
 import json
 import time
 import random
@@ -12,6 +11,7 @@ import functools
 import sys
 import ba_ws_sdk.streaming as streaming
 import ba_ws_sdk.file_system as file_system
+import ba_ws_sdk.variables as variables
 from testui.support.testui_driver import TestUIDriver
 
 DEFAULT_TIMEOUT = int(os.getenv("DEFAULT_TIMEOUT", "10"))
@@ -248,6 +248,7 @@ def create_driver(_run_test_id='1'):
     """
     global driver, test_variables
     test_variables[_run_test_id] = {}
+    variables.init_run(_run_test_id)
     from selenium.webdriver.chrome.options import Options
     from testui.support.appium_driver import NewDriver
     options = Options()
@@ -342,34 +343,21 @@ def _generate_from_regex(pattern):
     return ''.join(out)
 
 
-def set_variable(name, value='', _run_test_id='1', regex_const=''):
+def set_variable(name: str, value: str = '', _run_test_id: str = '1', regex_const: str = '') -> str:
     """
-    Set a variable for the running test.
-
-    Usage:
-        set_variable({'name': 'username', 'value': 'alice'})
-        set_variable({'name': 'token', 'regex_const': '[A-Z]{3}\\d{4}'})
-
-    - name: variable name (str)
-    - value: explicit value; if provided, it's stored as-is
-    - regex_const: optional simple regex-like construction to generate a random value. You can construct it like:
-        supporting ONLY \\d, \\w, ., [a-z], and {n} quantifier.
+    Set a named variable for this test run. Supports regex_const for random value generation.
+    Values are stored both locally (for use_vars resolution) and in the SDK (for cross-test passing).
     """
     global test_variables
     if _run_test_id not in test_variables:
         test_variables[_run_test_id] = {}
 
-    if value != '':
-        test_variables[_run_test_id][name] = value
-        return test_variables[_run_test_id][name]
-
     if regex_const:
-        generated = _generate_from_regex(regex_const)
-        test_variables[_run_test_id][name] = generated
-        return generated
+        value = _generate_from_regex(regex_const)
 
-    test_variables[_run_test_id][name] = ''
-    return ''
+    test_variables[_run_test_id][name] = value
+    variables.set_variable(name, value, _run_test_id)
+    return value
 
 
 def stop_driver(_run_test_id='1'):
@@ -389,10 +377,36 @@ def stop_driver(_run_test_id='1'):
             file_system.clear_downloads(_run_test_id)
         except Exception:
             pass
+        variables.export_run(_run_test_id)
+        variables.cleanup_run(_run_test_id)
         driver[_run_test_id].quit()
         log_function_definition(stop_driver, _run_test_id=_run_test_id)
         return "success"
     return "no driver"
+
+
+def return_variable(name: str, _run_test_id: str = "1") -> str:
+    """
+    Retrieve a named variable set earlier in this run or imported from
+    a dependency test.
+    """
+    return variables.return_variable(name, _run_test_id)
+
+
+def get_exported_variables(_run_test_id: str = "1") -> dict:
+    """
+    Return all variables set during this run. Called by the backend after
+    test completion to capture variables for dependent tests.
+    """
+    return variables.get_exported_variables(_run_test_id)
+
+
+def import_variables(variables_dict: dict, _run_test_id: str = "1") -> str:
+    """
+    Pre-populate variables exported by a dependency test.
+    Called as a preamble before the dependent test's own steps.
+    """
+    return variables.import_variables(variables_dict, _run_test_id)
 
 
 def maximize_window(_run_test_id='1'):

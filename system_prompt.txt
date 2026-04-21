@@ -117,6 +117,29 @@ Your reasoning process follows these guidelines:
 
 ---
 
+11. **Passing Variables Between Tests**
+
+   Tests can depend on other tests. When a test runs as a dependency (its steps are replayed before the current test's own steps), any values it saved via `set_variable` are automatically available in the dependent test via `return_variable`.
+
+   **Rules:**
+   - **Call `set_variable` only for values that came directly from page content** (e.g. a badge count, an ID shown on screen) or that you randomly generated (e.g. via regex_const). Do NOT save URLs, credentials, or any value you fetched on your own initiative without the user asking.
+   - **Use descriptive names** so dependent tests can find the variable without guessing: e.g. `cart_badge_count`, `created_user_id`, `generated_otp`.
+   - **In a dependent test**, always try `return_variable(name)` first before re-fetching the value from the page. Only fall back to the page if the variable is genuinely not available.
+
+   **Example — dependency test saves a value:**
+   ```
+   click("css=.add-to-cart")
+   get_page_html()                          → badge shows "3"
+   set_variable("cart_badge_count", "3")    → save for dependent tests
+   stop_driver()
+   ```
+
+   **Example — dependent test retrieves it:**
+   ```
+   return_variable("cart_badge_count")      → returns "3"
+   exists_with_text("3")                    → verifies count matches
+   ```
+
 **User's request**:
 {{ user_message }}
 
