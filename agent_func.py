@@ -161,8 +161,12 @@ def stop_all_drivers(**kwargs):
             except Exception as e:
                 print(f"⚠️ Error stopping driver '{run_id}': {e}")
 
+    stopped_count = len(driver)
     driver.clear()
     print("All drivers stopped and entries cleared.")
+    if stopped_count == 0:
+        return "No active drivers to stop."
+    return f"Stopped {stopped_count} driver(s) and cleared all entries."
 
 def log_function_definition(fn, *args, **kwargs):
     """
