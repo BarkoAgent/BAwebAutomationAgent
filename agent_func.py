@@ -259,6 +259,7 @@ def create_driver(_run_test_id='1'):
     options.add_argument("disable-features=PasswordCheck,PasswordLeakDetection,SafetyCheck")
     options.add_argument("--window-size=1280,800")
     options.page_load_strategy = 'eager'
+    options.set_capability("unhandledPromptBehavior", "ignore")
     download_dir = str(file_system.get_attachments_dir())
     os.makedirs(download_dir, exist_ok=True)
     prefs = {
