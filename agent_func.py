@@ -19,6 +19,9 @@ DEFAULT_TIMEOUT = int(os.getenv("DEFAULT_TIMEOUT", "10"))
 test_variables = {}
 driver: dict[str, TestUIDriver] = {}
 run_test_id = ""
+# Per-run default element-wait timeout (seconds); set by the backend during
+# AI/vision runs so waits don't stall the loop. See set_default_timeout.
+test_timeout: dict[str, int] = {}
 
 # Files to ignore when scanning the attachments directory
 _IGNORED_FILES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
@@ -410,17 +413,20 @@ def stop_driver(_run_test_id='1'):
     return "no driver"
 
 
-def maximize_window(_run_test_id='1'):
+def set_window_size(width, height, _run_test_id='1'):
     """
-    Maximizes the window for given run id.
+    Sets the window size for given run id.
 
     Usage:
-        maximize_window({})
+        for maximizing:
+            set_window_size({'width': 1280, 'height': 800})
+        for minimizing:
+            set_window_size({'width': 600, 'height': 600})
     """
     global driver
-    driver[_run_test_id].get_driver().set_window_size(1280, 800)
-    log_function_definition(maximize_window, _run_test_id=_run_test_id)
-    return "success maximizing"
+    driver[_run_test_id].get_driver().set_window_size(int(width), int(height))
+    log_function_definition(set_window_size, width, height, _run_test_id=_run_test_id)
+    return f"window size set to {width}x{height}"
 
 
 def add_cookie(name, value, _run_test_id='1', use_vars='false'):
@@ -690,6 +696,129 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
     log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
     return "clicked successfully on the element"
+
+
+###############################################################################
+# Vision support — coordinate clicks, raw JS, focused-element typing.
+# These mirror the Playwright agent so the backend "vision agent" pipeline
+# (DOM element-map, click probe, ai_action native clicks) works against the
+# Selenium agent too. They are driven by the backend over the same WebSocket
+# function names; the backend resolves the element under the cursor and clicks
+# its center via click_coordinates, so synthetic-event pitfalls are avoided.
+###############################################################################
+
+def set_default_timeout(timeout: str, _run_test_id='1') -> str:
+    """
+    Sets the default element-wait timeout (in SECONDS) for this run. The backend
+    calls this during AI/vision runs to shorten waits so the loop doesn't stall.
+    """
+    global test_timeout
+    try:
+        secs = max(1, min(60, int(float(timeout))))
+    except (TypeError, ValueError):
+        return "invalid timeout"
+    test_timeout[_run_test_id] = secs
+    return f"default timeout set to {secs}s"
+
+
+def run_javascript(script: str, _run_test_id='1') -> str:
+    """
+    Executes JavaScript in the current page and returns the result as a string.
+    The backend sends self-contained expressions (IIFEs that return a JSON
+    string). Selenium's execute_script needs an explicit return, unlike
+    Playwright's page.evaluate, so we wrap the expression in return (...).
+    """
+    global driver
+    drv = driver[_run_test_id].get_driver()
+    try:
+        result = drv.execute_script(f"return ({script});")
+    except Exception:
+        # Multi-statement or non-expression scripts: run as-is.
+        result = drv.execute_script(script)
+    return "" if result is None else str(result)
+
+
+def click_coordinates(x: str, y: str, _run_test_id='1') -> str:
+    """
+    Clicks at the given CSS-pixel viewport coordinates using a NATIVE W3C
+    pointer click (trusted events) - the Selenium equivalent of Playwright's
+    page.mouse.click. Native clicks open custom controls that ignore synthetic
+    JS events. Prefer click(locator) when a stable selector exists.
+    """
+    global driver
+    drv = driver[_run_test_id].get_driver()
+    cx, cy = int(float(x)), int(float(y))
+    from selenium.webdriver.common.actions.action_builder import ActionBuilder
+    from selenium.webdriver.common.actions.pointer_input import PointerInput
+    from selenium.webdriver.common.actions import interaction
+    actions = ActionBuilder(drv, mouse=PointerInput(interaction.POINTER_MOUSE, "mouse"))
+    actions.pointer_action.move_to_location(cx, cy)
+    actions.pointer_action.click()
+    actions.perform()
+    return f"clicked at ({cx}, {cy})"
+
+
+def move_mouse(x: str, y: str, _run_test_id='1') -> str:
+    """Moves the mouse pointer to the given CSS-pixel viewport coordinates (no click)."""
+    global driver
+    drv = driver[_run_test_id].get_driver()
+    from selenium.webdriver.common.actions.action_builder import ActionBuilder
+    from selenium.webdriver.common.actions.pointer_input import PointerInput
+    from selenium.webdriver.common.actions import interaction
+    actions = ActionBuilder(drv, mouse=PointerInput(interaction.POINTER_MOUSE, "mouse"))
+    actions.pointer_action.move_to_location(int(float(x)), int(float(y)))
+    actions.perform()
+    return f"moved to ({x}, {y})"
+
+
+def scroll_by(dx: str, dy: str, _run_test_id='1') -> str:
+    """Scrolls the page by the given CSS-pixel amounts (positive dy = down)."""
+    global driver
+    drv = driver[_run_test_id].get_driver()
+    drv.execute_script(
+        "window.scrollBy(arguments[0], arguments[1]);", int(float(dx)), int(float(dy))
+    )
+    return f"scrolled by ({dx}, {dy})"
+
+
+_KEY_MAP = None
+
+
+def _selenium_key(name: str):
+    """Map a vision-model key name (Enter, Tab, ArrowDown, ARROW_DOWN, ...) to a Selenium Keys value."""
+    global _KEY_MAP
+    from selenium.webdriver.common.keys import Keys
+    if _KEY_MAP is None:
+        _KEY_MAP = {
+            'enter': Keys.ENTER, 'return': Keys.ENTER, 'tab': Keys.TAB,
+            'escape': Keys.ESCAPE, 'esc': Keys.ESCAPE, 'space': Keys.SPACE,
+            'backspace': Keys.BACK_SPACE, 'delete': Keys.DELETE,
+            'arrowdown': Keys.ARROW_DOWN, 'arrowup': Keys.ARROW_UP,
+            'arrowleft': Keys.ARROW_LEFT, 'arrowright': Keys.ARROW_RIGHT,
+            'home': Keys.HOME, 'end': Keys.END,
+            'pagedown': Keys.PAGE_DOWN, 'pageup': Keys.PAGE_UP,
+        }
+    # Normalise both 'ArrowDown' and 'ARROW_DOWN' / 'arrow_down' to one key.
+    return _KEY_MAP.get(str(name).strip().lower().replace('_', ''), name)
+
+
+def type_keys(value: str, _run_test_id='1', clear: str = 'false', use_vars: str = 'false') -> str:
+    """
+    Types text into the currently focused element (no locator - used after a
+    coordinate click focuses a field). Set clear='true' to select-all + delete
+    before typing.
+    """
+    global driver, test_variables
+    if use_vars == 'true' and _run_test_id in test_variables:
+        value = test_variables[_run_test_id].get(value, value)
+    drv = driver[_run_test_id].get_driver()
+    from selenium.webdriver.common.keys import Keys
+    el = drv.switch_to.active_element
+    if clear == 'true':
+        el.send_keys(Keys.CONTROL, 'a')
+        el.send_keys(Keys.DELETE)
+    el.send_keys(value)
+    return "typed"
 
 
 def js_click(locator_type: str, locator: str, _run_test_id='1') -> str:
@@ -1128,34 +1257,27 @@ def get_attribute(locator_type: str, locator: str, attribute: str, _run_test_id=
     return value if value is not None else ''
 
 
-def press_key(locator_type: str, locator: str, key: str, _run_test_id='1') -> str:
+def press_key(key: str, locator_type: str = '', locator: str = '', _run_test_id='1') -> str:
     """
-    Sends a keyboard key to an element.
+    Sends a keyboard key. With a locator, sends it to that element; without one,
+    sends it to the currently focused element (vision/coordinate flows, after a
+    click focuses a field).
 
-    Supported keys: ENTER, TAB, ESCAPE, SPACE, BACKSPACE, DELETE,
-                    ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT,
-                    HOME, END, PAGE_UP, PAGE_DOWN.
+    Accepts keys as 'Enter', 'Tab', 'ArrowDown', 'ARROW_DOWN', 'ENTER', etc.
 
     Usage:
+        press_key({'key': 'Enter'})                                  # focused element
         press_key({'locator_type': 'css', 'locator': '#search', 'key': 'ENTER'})
-        press_key({'locator_type': 'css', 'locator': '#field', 'key': 'TAB'})
     """
     global driver
-    from selenium.webdriver.common.keys import Keys
-    key_map = {
-        'ENTER': Keys.ENTER, 'TAB': Keys.TAB,
-        'ESCAPE': Keys.ESCAPE, 'ESC': Keys.ESCAPE,
-        'SPACE': Keys.SPACE, 'BACKSPACE': Keys.BACKSPACE, 'DELETE': Keys.DELETE,
-        'ARROW_UP': Keys.ARROW_UP, 'ARROW_DOWN': Keys.ARROW_DOWN,
-        'ARROW_LEFT': Keys.ARROW_LEFT, 'ARROW_RIGHT': Keys.ARROW_RIGHT,
-        'HOME': Keys.HOME, 'END': Keys.END,
-        'PAGE_UP': Keys.PAGE_UP, 'PAGE_DOWN': Keys.PAGE_DOWN,
-    }
-    resolved_key = key_map.get(key.upper(), key)
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
-    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    element.send_keys(resolved_key)
-    log_function_definition(press_key, locator_type, locator, key, _run_test_id=_run_test_id)
+    resolved_key = _selenium_key(key)
+    if locator_type and locator:
+        driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
+        element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+        element.send_keys(resolved_key)
+        log_function_definition(press_key, key, locator_type=locator_type, locator=locator, _run_test_id=_run_test_id)
+        return f"pressed {key} on {locator}"
+    driver[_run_test_id].get_driver().switch_to.active_element.send_keys(resolved_key)
     return f"pressed {key}"
 
 
