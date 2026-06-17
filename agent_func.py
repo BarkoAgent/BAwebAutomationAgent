@@ -23,6 +23,27 @@ run_test_id = ""
 # AI/vision runs so waits don't stall the loop. See set_default_timeout.
 test_timeout: dict[str, int] = {}
 
+
+def _normalize_locator(locator_type: str, locator: str):
+    """
+    Accept either the Selenium-style (locator_type, locator) pair OR a single
+    combined locator like 'css=#id' / 'xpath=//a' (Playwright-style — what the
+    backend vision pipeline sends, since the Playwright agent takes one arg).
+    Returns (locator_type, locator).
+    """
+    lt = (locator_type or '').strip()
+    loc = locator if locator is not None else ''
+    if not lt and isinstance(loc, str):
+        m = re.match(
+            r'^\s*(css|xpath|id|name|class|link_text|partial_link_text|tag)\s*=\s*(.*)$',
+            loc, re.IGNORECASE | re.DOTALL,
+        )
+        if m:
+            lt, loc = m.group(1).lower(), m.group(2)
+    if not lt:
+        lt = 'css'  # sensible default for a bare selector
+    return lt, loc
+
 # Files to ignore when scanning the attachments directory
 _IGNORED_FILES = {'.DS_Store', 'Thumbs.db', 'desktop.ini'}
 
@@ -469,7 +490,7 @@ def navigate_to_url(url: str, _run_test_id='1', use_vars='false') -> str:
     return url
 
 
-def send_keys(locator_type: str, locator: str, value: str, _run_test_id='1', use_vars: str = 'false') -> str:
+def send_keys(locator_type: str = '', locator: str = '', value: str = '', _run_test_id='1', use_vars: str = 'false') -> str:
     """
     Types `value` into element specified by locator.
 
@@ -485,9 +506,33 @@ def send_keys(locator_type: str, locator: str, value: str, _run_test_id='1', use
     if use_vars == 'true' and _run_test_id in test_variables:
         value = test_variables[_run_test_id].get(value, value)
 
+    locator_type, locator = _normalize_locator(locator_type, locator)
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).send_keys(value=value)
     log_function_definition(send_keys, locator_type, locator, value, _run_test_id=_run_test_id)
     return "sent keys"
+
+
+def select_native_dropdown(locator_type: str = '', locator: str = '', option: str = '', by: str = 'label', _run_test_id='1') -> str:
+    """
+    Selects an option in a native <select> dropdown. `by` is 'label' (visible
+    text, default), 'value', or 'index'. Accepts a combined locator (e.g.
+    'css=#year'). Vision-pipeline compatible (mirrors the Playwright agent).
+    """
+    global driver
+    from selenium.webdriver.support.ui import Select
+    locator_type, locator = _normalize_locator(locator_type, locator)
+    driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(DEFAULT_TIMEOUT)
+    element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
+    sel = Select(element)
+    b = (by or 'label').strip().lower()
+    if b == 'value':
+        sel.select_by_value(option)
+    elif b == 'index':
+        sel.select_by_index(int(option))
+    else:
+        sel.select_by_visible_text(option)
+    log_function_definition(select_native_dropdown, locator_type, locator, option, by, _run_test_id=_run_test_id)
+    return f"selected {option}"
 
 
 def exists(locator_type: str, locator: str, _run_test_id='1') -> str:
@@ -678,9 +723,10 @@ def scroll_to_element(locator_type: str, locator: str, _run_test_id='1') -> str:
     return "scrolled"
 
 
-def click(locator_type: str, locator: str, _run_test_id='1') -> str:
+def click(locator_type: str = '', locator: str = '', _run_test_id='1') -> str:
     """
     Clicks the element identified by `locator_type` (id, css, xpath) and `locator`.
+    Also accepts a single combined locator (e.g. 'css=#id') with no locator_type.
 
     Scrolls the element into view first, then performs a standard Selenium mouse click.
     This simulates a real user click including mouse movement, which is suitable for most
@@ -688,12 +734,51 @@ def click(locator_type: str, locator: str, _run_test_id='1') -> str:
     with synthetic event handlers), use js_click instead.
     """
     global driver
+    locator_type, locator = _normalize_locator(locator_type, locator)
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(DEFAULT_TIMEOUT)
     from selenium.webdriver.common.action_chains import ActionChains
     selenium_driver = driver[_run_test_id].get_driver()
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
-    ActionChains(selenium_driver).move_to_element(element).perform()
-    driver[_run_test_id].e(locator_type=locator_type, locator=locator).click()
+    # Scroll into view first (overlays/sticky bars often sit at the edges).
+    try:
+        selenium_driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center',inline:'center'});", element
+        )
+    except Exception:
+        pass
+    # Click the raw Selenium element directly (NOT driver.e(...).click(), which
+    # runs the framework's own error-screenshot handler and re-wraps interception
+    # errors in a custom exception class our handler wouldn't catch). We detect
+    # interception by message — covering "intercepted" and "not clickable at
+    # point" regardless of the concrete exception type — and dispatch the click
+    # via JS (bypasses the covering overlay). Mirrors the Playwright native click.
+    try:
+        ActionChains(selenium_driver).move_to_element(element).perform()
+        element.click()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "intercept" in msg or "not clickable" in msg or "obscure" in msg:
+            # Re-resolve a FRESH element handle: the original reference can go
+            # stale (page re-render / overlay swap) between get_element() and
+            # here, in which case chromedriver passes null into execute_script
+            # and "arguments[0].click()" throws "reading 'click' of null".
+            try:
+                element = driver[_run_test_id].e(
+                    locator_type=locator_type, locator=locator
+                ).get_element()
+            except Exception:
+                element = None
+            # null-safe JS click: if the handle is gone, resolve by the same CSS
+            # selector in-page; if still nothing, no-op instead of throwing.
+            sel = locator if locator_type == 'css' else ''
+            selenium_driver.execute_script(
+                "var el=arguments[0];"
+                "if(!el && arguments[1]){try{el=document.querySelector(arguments[1]);}catch(e){}}"
+                "if(el){el.scrollIntoView({block:'center',inline:'center'});el.click();}",
+                element, sel,
+            )
+        else:
+            raise
     log_function_definition(click, locator_type, locator, _run_test_id=_run_test_id)
     return "clicked successfully on the element"
 
@@ -730,10 +815,27 @@ def run_javascript(script: str, _run_test_id='1') -> str:
     """
     global driver
     drv = driver[_run_test_id].get_driver()
-    try:
-        result = drv.execute_script(f"return ({script});")
-    except Exception:
-        # Multi-statement or non-expression scripts: run as-is.
+    # Wrap single expressions (incl. IIFEs like the element-map probe) in
+    # `return (...)` so Selenium hands back their value. A TRAILING semicolon
+    # must be stripped first: `return ( (function(){...})(); )` is a syntax
+    # error (semicolon inside grouping parens), which would silently fall back
+    # to the no-return path and yield an empty result — breaking the vision
+    # element map and any JSON.stringify(...) read-back. (Playwright's
+    # page.evaluate has no such issue, which is why it worked there.)
+    expr = script.strip()
+    while expr.endswith(';'):
+        expr = expr[:-1].rstrip()
+    result = None
+    ran = False
+    if expr:
+        try:
+            result = drv.execute_script(f"return ({expr});")
+            ran = True
+        except Exception:
+            ran = False
+    if not ran:
+        # Multi-statement or non-expression scripts: run as-is (side effects
+        # only; no value is returned to the caller).
         result = drv.execute_script(script)
     return "" if result is None else str(result)
 
@@ -848,7 +950,7 @@ def js_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     return "clicked successfully on the element using JavaScript"
 
 
-def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
+def double_click(locator_type: str = '', locator: str = '', _run_test_id='1') -> str:
     """
     Double clicks on element.
 
@@ -856,6 +958,7 @@ def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
         double_click({'locator_type': 'xpath', 'locator': '//button[@id=\"save\"]'})
     """
     global driver
+    locator_type, locator = _normalize_locator(locator_type, locator)
     from selenium.webdriver.common.action_chains import ActionChains
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
@@ -865,7 +968,7 @@ def double_click(locator_type: str, locator: str, _run_test_id='1') -> str:
     return "double clicked"
 
 
-def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
+def right_click(locator_type: str = '', locator: str = '', _run_test_id='1') -> str:
     """
     Right clicks on element.
 
@@ -873,6 +976,7 @@ def right_click(locator_type: str, locator: str, _run_test_id='1') -> str:
         right_click({'locator_type': 'css', 'locator': '.item .menu'})
     """
     global driver
+    locator_type, locator = _normalize_locator(locator_type, locator)
     from selenium.webdriver.common.action_chains import ActionChains
     driver[_run_test_id].e(locator_type=locator_type, locator=locator).wait_until_exists(seconds=DEFAULT_TIMEOUT)
     element = driver[_run_test_id].e(locator_type=locator_type, locator=locator).get_element()
